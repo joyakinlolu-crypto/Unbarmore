@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { NextResponse, type NextRequest } from 'next/server';
-import { buildAdvisorSystemPrompt, buildBusinessSnapshot } from '@/lib/advisorContext';
+import { buildAdvisorSystemPrompt, buildBusinessSnapshot, isFinalFreeMessage } from '@/lib/advisorContext';
 import { getSession } from '@/lib/auth';
 import { db } from '@/lib/supabase';
 
@@ -20,11 +20,13 @@ export async function POST(req: NextRequest) {
 
   // Tier gate (spec §5.B.2): unlimited on paid tiers, 10/month on trial & free_limited.
   const tier = session.business.subscription_tier;
+  let finalFreeMessage = false;
   if (tier === 'trial' || tier === 'free_limited') {
     // The limit (3/month) lives in SQL — advisor_usage() — so the route and the UI read the same number.
     const { data: u } = await db.rpc('advisor_usage', { p_business_id: businessId });
     const { used, free_limit } = ((u as { used: number; free_limit: number }[] | null)?.[0]) ?? { used: 0, free_limit: 3 };
     if (used >= free_limit) return NextResponse.json({ error: 'limit', limit: free_limit }, { status: 402 });
+    finalFreeMessage = isFinalFreeMessage(tier, used, free_limit); // this is message 3 of 3 → lead with their biggest ₦ leak
   }
   // Burst guard: even "unlimited" shouldn't let a loop burn the Gemini bill.
   const { count: recent } = await db.from('web_chat_messages').select('id', { count: 'exact', head: true })
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
   if (insErr || !userRow) return NextResponse.json({ error: 'save_failed' }, { status: 500 });
 
   const snapshot = await buildBusinessSnapshot(businessId);
-  const systemInstruction = buildAdvisorSystemPrompt(snapshot);
+  const systemInstruction = buildAdvisorSystemPrompt(snapshot, { finalFreeMessage });
 
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({

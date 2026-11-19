@@ -13,10 +13,12 @@ npm run dev
 
 ## Before you can go live (things only you can do)
 1. **Meta**: verified business, WhatsApp number, webhook → `POST {PUBLIC_BASE_URL}/webhooks/whatsapp`, subscribe to `messages`.
-2. **Meta template** `unbarmore_weekly_ceo_report` (category *Utility*), buttons in THIS order (indices matter):
-   0. **URL** button "Open dashboard" → `https://app.unbarmore.com/auth/verify?token={{1}}` (dynamic suffix; the backend sends the one-time token),
-   1–3. **Quick replies** with payloads `BTN_CHASE_DEBT`, `BTN_DEADSTOCK_PROMO`, `BTN_EXPORT_PDF`.
-   Body has exactly 5 variables (business name, revenue, net profit, owed, expense alert). Until approved, Sunday sends to users outside 24h fail (in-window users are unaffected).
+2. **Meta template** `unbarmore_weekly_ceo_report` (category *Utility*) with exactly **one** button:
+   **URL** "Open Full Dashboard" → `https://app.unbarmore.com/auth/verify?token={{1}}` (index 0; dynamic suffix, the backend sends the one-time token).
+   **No quick-reply buttons** (mixing them with a URL button is the WhatsApp Desktop problem). Body has exactly 5 variables
+   (business name, revenue, net profit, owed, expense alert); end the static body text with *"Reply CHASE, PROMO or STATEMENT any time."*
+   — those three actions are plain text commands, and users who are inside the 24h window still get them as tap-buttons.
+   Until approved, Sunday sends to users outside 24h fail (in-window users are unaffected).
 3. **Paystack**: create 4 plans (₦5k/₦50k, ₦15k/₦150k), put codes in `.env`, webhook → `/webhooks/paystack`.
 4. **Music**: drop licensed Afrobeats instrumentals in `assets/bgm/` (none bundled — licensing). Videos render voice-only without them.
 5. **Google TTS** credentials (`GOOGLE_APPLICATION_CREDENTIALS`) or switch `TTS_PROVIDER=azure`.

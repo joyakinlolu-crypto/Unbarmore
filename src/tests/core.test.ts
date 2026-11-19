@@ -141,3 +141,15 @@ describe('Meta template components', () => {
     expect(c.map((x: any) => x.index)).toEqual([undefined, '0', '1']);
   });
 });
+
+describe('Sunday CEO template payload: URL button only', () => {
+  it('body + exactly ONE button (dynamic URL, index 0) and no quick replies', () => {
+    const tok = 'cd'.repeat(32);
+    const c = templateComponents(['Ada', '₦500k', '₦120k', '₦20k (2 customers)', 'Fuel up 40%'], [], tok) as any[];
+    expect(c).toHaveLength(2);
+    expect(c[0].type).toBe('body');
+    expect(c[0].parameters).toHaveLength(5);
+    expect(c[1]).toEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: tok }] });
+    expect(c.some((x) => x.sub_type === 'quick_reply')).toBe(false);
+  });
+});

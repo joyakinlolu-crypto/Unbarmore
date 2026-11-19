@@ -115,13 +115,13 @@ async function sundayCeo(): Promise<void> {
         r.button('BTN_EXPORT_PDF', '📄 Export PDF');
         await r.send();
       } else {
-        // The approved template has a dynamic URL button (…/auth/verify?token={{1}}) → per-user one-tap login.
-        // If throttled we still must supply a value; a non-hex placeholder lands on the harmless "link expired → LOGIN" page.
+        // The approved template has ONE button: a dynamic URL button "Open Full Dashboard" (index 0) →
+        // …/auth/verify?token={{1}}. No quick replies: mixing URL + quick-reply buttons is what breaks on WhatsApp Desktop.
+        // (CHASE / PROMO / STATEMENT stay available as text commands and as buttons in the free in-window version.)
+        // If token issuing is throttled we still must supply a value; a non-hex placeholder lands on the harmless
+        // "link expired → text LOGIN" page.
         const token = (await createOwnerMagicToken(biz.id).catch(() => null)) ?? 'expired';
-        await sendTemplate(
-          biz.owner_phone, env.WHATSAPP_CEO_TEMPLATE, reportTemplateParams(biz, rep),
-          ['BTN_CHASE_DEBT', 'BTN_DEADSTOCK_PROMO', 'BTN_EXPORT_PDF'], token,
-        );
+        await sendTemplate(biz.owner_phone, env.WHATSAPP_CEO_TEMPLATE, reportTemplateParams(biz, rep), [], token);
       }
     } catch (err) {
       console.error('[cron:sunday-ceo]', biz.id, err);

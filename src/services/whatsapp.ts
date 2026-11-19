@@ -190,9 +190,9 @@ export const reply = (to: string) => new Reply(to);
 
 /**
  * Template components. Button order must match the order defined in Meta Business Manager:
- *   index 0      → dynamic URL button  (https://app.unbarmore.com/auth/verify?token={{1}}), optional
- *   index 1..n   → quick-reply buttons (BTN_CHASE_DEBT, BTN_DEADSTOCK_PROMO, BTN_EXPORT_PDF)
- * With no URL button, quick replies start at index 0.
+ *   index 0      → dynamic URL button  (https://app.unbarmore.com/auth/verify?token={{1}})
+ *   index 1..n   → quick-reply buttons, only if a template defines them
+ * The Sunday CEO report uses the URL button ONLY (no quick replies), so it renders on WhatsApp Desktop too.
  */
 export function templateComponents(bodyParams: string[], quickReplyPayloads: string[] = [], urlToken?: string): Record<string, unknown>[] {
   const offset = urlToken ? 1 : 0;

@@ -28,7 +28,7 @@ vi.mock('@/lib/supabase', () => {
   return { db: { from: chain, rpc: async (n: string) => ({ data: DATA.rpc[n] ?? [], error: null }) } };
 });
 
-import { buildAdvisorSystemPrompt, buildBusinessSnapshot, clean } from '@/lib/advisorContext';
+import { buildAdvisorSystemPrompt, buildBusinessSnapshot, clean, finalFreeHeadline, isFinalFreeMessage, type BusinessFinancialSnapshot } from '@/lib/advisorContext';
 import { hashToken, newRawToken } from '@/lib/auth';
 import { waNumber, watMonthStart } from '@/lib/format';
 import { signSession, verifySession } from '@/lib/jwt';
@@ -167,5 +167,48 @@ describe('free-tier upgrade CTA (limit = 3)', () => {
     const paid = renderToStaticMarkup(<Chat initial={msgs} tier="starter_5k" bot="1" freeLeft={null} freeLimit={3} />);
     expect(paid).not.toContain('Unlimited CFO Chat');
     expect(paid).not.toContain('free chat');
+  });
+});
+
+describe('message 3 of 3: open with the biggest exact ₦ leak', () => {
+  it('only the last free message for trial / free_limited is flagged', () => {
+    expect(isFinalFreeMessage('trial', 2, 3)).toBe(true);        // 3rd message being sent
+    expect(isFinalFreeMessage('free_limited', 2, 3)).toBe(true);
+    expect(isFinalFreeMessage('trial', 1, 3)).toBe(false);       // 2nd
+    expect(isFinalFreeMessage('trial', 0, 3)).toBe(false);       // 1st
+    expect(isFinalFreeMessage('starter_5k', 2, 3)).toBe(false);  // paid tiers never
+    expect(isFinalFreeMessage('growth_15k', 99, 3)).toBe(false);
+  });
+
+  const snap = (over: { cats?: BusinessFinancialSnapshot['last30Days']['topExpenseCategories']; debtors?: BusinessFinancialSnapshot['debtors']['topDebtors'] }): BusinessFinancialSnapshot => ({
+    businessName: 'Ada Fabrics', category: 'Fashion', subscriptionTier: 'trial', todayWat: '2026-11-19', valueRecoveredNgn: 0,
+    last30Days: { revenueNgn: 500000, expensesNgn: 80000, restockNgn: 0, netProfitNgn: 420000, netMarginPct: 84, cashCollectedNgn: 400000, newCreditSalesUnpaidNgn: 0, creditSharePct: 0, topExpenseCategories: over.cats ?? [] },
+    debtors: { totalOutstandingDebtNgn: 0, debtorCount: 0, topDebtors: over.debtors ?? [] },
+    inventoryAndPricing: { topProducts: [], inflationAlerts: [], deadStockItems: [] },
+  });
+  const fuel = { category: 'Fuel/Diesel', totalNgn: 60000, sharePct: 75 };
+  const tunde = { name: 'Mama Tunde', phone: null, amountOwedNgn: 95000, dueDate: null, daysOwing: 23 };
+
+  it('picks the bigger of top expense category vs top debt, with the exact figure', () => {
+    expect(finalFreeHeadline(snap({ cats: [fuel], debtors: [tunde] }))).toMatchObject({ kind: 'debt', amountNgn: 95000 });
+    expect(finalFreeHeadline(snap({ cats: [fuel], debtors: [tunde] }))!.fact).toBe('Mama Tunde owes you ₦95,000 and it has been 23 days.');
+    expect(finalFreeHeadline(snap({ cats: [fuel], debtors: [{ ...tunde, amountOwedNgn: 20000 }] }))!.fact).toContain('Fuel/Diesel has cost you ₦60,000');
+  });
+  it('skips the vague "Other" bucket when a specific category exists; falls back when it is all there is', () => {
+    const other = { category: 'Other', totalNgn: 90000, sharePct: 60 };
+    expect(finalFreeHeadline(snap({ cats: [other, fuel] }))!.fact).toContain('Fuel/Diesel');
+    expect(finalFreeHeadline(snap({ cats: [other] }))!.fact).toContain('Other');
+  });
+  it('returns null with no data, so nothing is forced', () => { expect(finalFreeHeadline(snap({}))).toBeNull(); });
+
+  it('the instruction appears in the system prompt ONLY on the final free message', () => {
+    const s = snap({ cats: [fuel], debtors: [tunde] });
+    const on = buildAdvisorSystemPrompt(s, { finalFreeMessage: true });
+    expect(on).toContain("LAST FREE ADVISOR MESSAGE");
+    expect(on).toContain('Mama Tunde owes you ₦95,000 and it has been 23 days.');
+    expect(on).toContain('first sentence');
+    expect(on).toContain('Do NOT mention limits');
+    expect(buildAdvisorSystemPrompt(s)).not.toContain('LAST FREE ADVISOR MESSAGE');
+    expect(buildAdvisorSystemPrompt(snap({}), { finalFreeMessage: true })).not.toContain('LAST FREE ADVISOR MESSAGE');
   });
 });

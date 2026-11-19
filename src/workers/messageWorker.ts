@@ -97,7 +97,7 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   if (msg.type === 'audio' && msg.audio) {
     if (!PLANS[actor.business.subscription_tier].voiceNotes) {
       return reply(phone)
-        .text('🎙️ Voice notes are on Starter (₦5k/mo). On the free plan, just type it: _"sold 2 lace 50k transfer"_')
+        .text('🎙️ *Speak a full day\'s sales & expenses in one voice note* — that\'s Starter (₦5k/mo).', 'On the free plan, just type it: _"sold 2 lace 50k transfer"_')
         .button('PLANS', '⭐ See plans');
     }
     const audio = await downloadMedia(msg.audio.id);
@@ -345,7 +345,8 @@ function plansMenu(actor: Actor): Reply {
     .text(
       '*Unbarmore plans*',
       `⭐ Starter — ${ngn(PRICES_NGN.starter_5k.monthly)}/mo or ${ngn(PRICES_NGN.starter_5k.annual)}/yr (2 months free)`,
-      '15 HD videos · 250 logged messages · 150 alert checks · voice notes · Inflation Shield · Sunday CEO report',
+      '🎙️ *Speak a full day\'s sales & expenses in one voice note* — I split it into every sale, expense and debt. One voice note = 1 of your 250 messages.',
+      '15 HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor',
       '',
       `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
       '50 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
