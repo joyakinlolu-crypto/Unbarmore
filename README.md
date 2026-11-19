@@ -67,3 +67,12 @@ magic tokens → advisor limit → Paystack upgrade + ₦1,000 referral (idempot
 - Image + TTS calls must use the `v1beta` API surface (the SDK default is `v1`).
 - `npx tsx scripts/live-gemini.mts` (set `GEMINI_API_KEY`, `NODE_USE_ENV_PROXY=1` in the sandbox) exercises the router on Pidgin/Yoruba/SMS,
   objection handling, off-topic refusal, video script limits, bank-alert OCR and a synthetic voice note.
+
+## Live web end-to-end (real Supabase + Gemini + browser)
+```bash
+cd web && NODE_ENV=production npx next build --webpack && NODE_USE_ENV_PROXY=1 npx next start -p 3333 &   # NODE_USE_ENV_PROXY only needed behind the sandbox proxy
+set -a; . web/.env.local; set +a; NODE_USE_ENV_PROXY=1 npx tsx scripts/live-web-e2e.mts
+```
+Seeds a business (sales ₦200k, fuel ₦60k, rent ₦20k, a ₦95k debtor), mints a magic link with the backend's own function, then checks:
+login (GET doesn't consume, POST redeems once, cookie flags, replay/forged rejected) → dashboard figures → ledger/debtors/settings/PDF →
+3 advisor chats in a real browser (reply #3 opens with the exact ₦ fact, CTA + locked input, server 402 on #4, state survives reload). Cleans up after itself.

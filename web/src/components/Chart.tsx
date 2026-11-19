@@ -12,10 +12,10 @@ export default function Chart({ data }: { data: Point[] }) {
   const max = Math.max(1, ...data.flatMap((d) => [d.revenue, d.spend]));
   const nice = Math.pow(10, Math.floor(Math.log10(max)));
   const top = Math.ceil(max / nice) * nice;
-  const W = 600, H = 200, padL = 44, padB = 22, plotW = W - padL, plotH = H - padB;
+  const W = 600, H = 210, padL = 44, padB = 22, padT = 12, plotW = W - padL, plotH = H - padB - padT;
   const slot = plotW / data.length;
   const bw = Math.max(2, Math.min(14, slot * 0.36));
-  const y = (v: number) => plotH - (v / top) * plotH;
+  const y = (v: number) => padT + plotH - (v / top) * plotH; // padT keeps the top gridline label from clipping
   const s = sel !== null ? data[sel] : null;
 
   return (
@@ -39,9 +39,9 @@ export default function Chart({ data }: { data: Point[] }) {
           const cx = padL + slot * i + slot / 2;
           return (
             <g key={i} onClick={() => setSel(i === sel ? null : i)} className="cursor-pointer">
-              <rect x={padL + slot * i} y={0} width={slot} height={plotH} fill={i === sel ? '#EFF6FF' : 'transparent'} />
-              <rect x={cx - bw - 1} y={y(d.revenue)} width={bw} height={plotH - y(d.revenue)} rx="2" fill="#2563EB" />
-              <rect x={cx + 1} y={y(d.spend)} width={bw} height={plotH - y(d.spend)} rx="2" fill="#E11D48" opacity="0.85" />
+              <rect x={padL + slot * i} y={padT} width={slot} height={plotH} fill={i === sel ? '#EFF6FF' : 'transparent'} />
+              <rect x={cx - bw - 1} y={y(d.revenue)} width={bw} height={padT + plotH - y(d.revenue)} rx="2" fill="#2563EB" />
+              <rect x={cx + 1} y={y(d.spend)} width={bw} height={padT + plotH - y(d.spend)} rx="2" fill="#E11D48" opacity="0.85" />
               {(i === 0 || i === data.length - 1 || i % Math.ceil(data.length / 6) === 0) && (
                 <text x={cx} y={H - 5} textAnchor="middle" fontSize="11" fill="#94A3B8">{d.label}</text>
               )}
