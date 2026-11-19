@@ -48,7 +48,7 @@ export const PRICES_NGN = {
 
 export const METRIC_LABEL: Record<Metric, string> = {
   videos_used_this_month: 'sales videos',
-  tx_logged_this_month: 'ledger entries',
+  tx_logged_this_month: 'logged messages',
   ocr_scans_used_this_month: 'alert/receipt scans',
   pdf_receipts_used_this_month: 'PDF receipts',
   ceo_reports_used_this_month: 'CEO reports',

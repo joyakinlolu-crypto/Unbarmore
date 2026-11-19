@@ -5,7 +5,7 @@ import { env } from '../config/env.js';
 import { PLANS, PRICES_NGN } from '../config/plans.js';
 import {
   addStaff, claimMessageId, findBusinessByReferralCode, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
-  resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, refundQuota, getBatchRows, createBusiness,
+  resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, createBusiness,
   type Actor, type Session,
 } from '../db/supabase.js';
 import { imageBatchQueue, QUEUE, redisConnection } from '../lib/queues.js';
@@ -16,7 +16,7 @@ import { createCheckoutLink, requestPayout } from '../services/paystack.js';
 import { downloadMedia, markReadWithTyping, reply, type Reply, type WaInboundMessage } from '../services/whatsapp.js';
 import { answerQuery } from '../flows/insights.js';
 import {
-  acceptMarginShield, bankAlertReply, confirmAndRespond, linesToDrafts, proposeBatch, quotaReply, undoAndRespond,
+  acceptMarginShield, bankAlertReply, confirmAndRespond, discardPending, linesToDrafts, MAX_LINES_PER_MESSAGE, proposeBatch, quotaReply, undoAndRespond,
 } from '../flows/ledger.js';
 import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/reports.js';
 import { startVideo } from '../flows/video.js';
@@ -76,11 +76,12 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   const buttonId = msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id ?? msg.button?.payload ?? null;
   if (buttonId) return onButton(actor, buttonId, session);
 
-  // Edit flow: whatever comes next (text OR voice) replaces the pending batch.
-  if (session.current_state === 'AWAITING_TX_EDIT' && (msg.type === 'text' || msg.type === 'audio')) {
-    const old = session.pending_payload.batch_id as string;
-    const oldRows = await getBatchRows(old);
-    if (await undoBatch(old)) await refundQuota(actor.business.id, 'tx_logged_this_month', oldRows.length);
+  // Edit flow: whatever comes next (text OR voice) replaces the pending batch. Nothing was charged for the pending
+  // batch (metering happens at confirmation), so there is nothing to refund. A voice note the plan can't take
+  // must NOT discard the pending entry — the user would lose it for nothing.
+  const voiceBlocked = msg.type === 'audio' && !PLANS[actor.business.subscription_tier].voiceNotes;
+  if (session.current_state === 'AWAITING_TX_EDIT' && (msg.type === 'text' || msg.type === 'audio') && !voiceBlocked) {
+    await undoBatch(session.pending_payload.batch_id as string);
     await setSession(phone, 'IDLE', {});
     session = { ...session, current_state: 'IDLE', pending_payload: {} };
   }
@@ -165,7 +166,7 @@ async function applyReferral(businessId: string, code: string): Promise<boolean>
 
 function welcomeDone(phone: string, name: string, myCode: string, usedCode: string | null): Reply {
   return reply(phone).text(
-    `🎉 You're in, *${name}*! Free trial: 2 videos · 20 records · 10 alert checks.`,
+    `🎉 You're in, *${name}*! Free trial: 2 videos · 20 logged messages · 10 alert checks.`,
     usedCode ? `🎁 Referral ${usedCode} applied.` : '',
     '',
     '*Try one now:*',
@@ -344,10 +345,10 @@ function plansMenu(actor: Actor): Reply {
     .text(
       '*Unbarmore plans*',
       `⭐ Starter — ${ngn(PRICES_NGN.starter_5k.monthly)}/mo or ${ngn(PRICES_NGN.starter_5k.annual)}/yr (2 months free)`,
-      '15 HD videos · 250 records · 150 alert checks · voice notes · Inflation Shield · Sunday CEO report',
+      '15 HD videos · 250 logged messages · 150 alert checks · voice notes · Inflation Shield · Sunday CEO report',
       '',
       `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
-      '50 videos, no watermark · unlimited records · 10 staff numbers with audit · live Google Sheet',
+      '50 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
       Number(b.referral_wallet_ngn) > 0 ? `\n🎁 Your ${ngn(b.referral_wallet_ngn)} wallet is applied automatically.` : '',
     )
     .listMenu('Choose plan', [
@@ -367,10 +368,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     case 'TXE':
       await setSession(actor.phone, 'AWAITING_TX_EDIT', { batch_id: a });
       return reply(actor.phone).text('✏️ Send the correct version (text or voice note) and I\'ll replace it.');
-    case 'TXX': {
-      await undoBatch(a!);
-      return reply(actor.phone).text('❌ Ignored. Nothing was recorded.');
-    }
+    case 'TXX': return discardPending(actor, a!);
     case 'TXU': return undoAndRespond(actor, a!);
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
@@ -435,6 +433,9 @@ async function runBrain(
   switch (brain.intent) {
     case 'LOG_TRANSACTION': {
       if (!brain.transactions?.length) return reply(actor.phone).text(brain.clarification_needed ?? 'I couldn\'t find an amount. Try: _"sold 2 lace 50k cash"_');
+      if (brain.transactions.length > MAX_LINES_PER_MESSAGE) {
+        return reply(actor.phone).text(`That's ${brain.transactions.length} items in one message — please send them in batches of ${MAX_LINES_PER_MESSAGE} or fewer so I can check each one.`);
+      }
       return proposeBatch(actor, source, linesToDrafts(brain.transactions), {
         clarification: brain.clarification_needed,
         prefix: brain.transcript ? `🎙️ _"${brain.transcript.slice(0, 200)}"_\n` : undefined,

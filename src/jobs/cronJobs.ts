@@ -33,7 +33,7 @@ async function hourly(): Promise<void> {
       await reply(b.owner_phone as string)
         .text(
           '⏰ Your 7-day trial has ended — but you are *not* locked out.',
-          'You keep: 1 video/month · 20 text records · 3 PDF receipts.',
+          'You keep: 1 video/month · 20 text/SMS messages · 3 PDF receipts.',
           'Starter (₦5k/mo) unlocks voice notes, fake-alert checks, 15 videos and the Sunday CEO report.',
         )
         .button('PLANS', '⭐ See plans')

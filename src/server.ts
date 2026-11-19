@@ -74,7 +74,7 @@ app.post('/webhooks/paystack', async (req, res) => {
     // Payer just interacted (they were on the checkout link) — but the window may be stale; failure is non-fatal.
     await reply(b.owner_phone).text(
       `🎉 *Payment received — you're on ${label}${interval === 'annual' ? ' (yearly)' : ''}!*`,
-      tier === 'growth_15k' ? '50 videos · unlimited records · 10 staff numbers · Google Sheets sync' : '15 videos · 250 records · 150 alert checks · voice notes · Sunday CEO report',
+      tier === 'growth_15k' ? '50 videos · unlimited logging · 10 staff numbers · Google Sheets sync' : '15 videos · 250 logged messages · 150 alert checks · voice notes · Sunday CEO report',
       referralCredited ? `🎁 ₦1,000 referral reward added to your wallet (${ngn(b.referral_wallet_ngn)}).` : '',
       '', 'Send a voice note or photos to get going.',
     ).send().catch(() => undefined);

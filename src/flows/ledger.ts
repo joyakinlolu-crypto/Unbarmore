@@ -1,7 +1,7 @@
 import { PLANS } from '../config/plans.js';
 import {
   confirmBatch, consumeQuota, createPendingBatch, db, findBankSessionReuse, getBatchRows, getProduct, isInServiceWindow,
-  setReceiptUrl, signedUrl, undoBatch, updateBusiness, uploadFile,
+  refundQuota, setReceiptUrl, signedUrl, undoBatch, updateBusiness, uploadFile,
   type Actor, type PayMethod, type SourceChannel, type TxnDraft, type TxnRow,
 } from '../db/supabase.js';
 import type { BankAlert, TxnLine } from '../services/geminiBrain.js';
@@ -57,13 +57,26 @@ export function draftLine(d: TxnDraft): string {
   return s;
 }
 
+/**
+ * Metering rule: ONE confirmed inbound message = ONE unit of `tx_logged_this_month`, however many line items
+ * Gemini extracts from it ("sold 2 lace, buy fuel, collect from Tunde" = 1). Only voice, text and forwarded SMS count;
+ * screenshots/receipts are already metered by the OCR quota and must not be charged twice.
+ */
+export const countsTowardTxQuota = (source: SourceChannel): boolean =>
+  source === 'whatsapp_voice' || source === 'whatsapp_text' || source === 'sms_forward';
+
+/** Soft guard so "1 message = 1 unit" can't be abused by pasting a whole notebook into a single message. */
+export const MAX_LINES_PER_MESSAGE = 25;
+
 /** Step 1 of HITL: parse → pending batch → one reply with summary + [Confirm] [Edit]. */
 export async function proposeBatch(
   actor: Actor, source: SourceChannel, drafts: TxnDraft[], opts: { clarification?: string; prefix?: string } = {},
 ): Promise<Reply> {
   const r = reply(actor.phone);
-  const ok = await consumeQuota(actor.business, 'tx_logged_this_month', drafts.length);
-  if (!ok) return quotaReply(actor, 'tx_logged_this_month');
+  // Pre-check only (no charge yet): don't walk a user through Confirm just to block them at the end.
+  // The atomic charge happens at confirmation, in confirmAndRespond.
+  const cap = PLANS[actor.business.subscription_tier].tx_logged_this_month;
+  if (countsTowardTxQuota(source) && cap >= 0 && actor.business.tx_logged_this_month >= cap) return quotaReply(actor, 'tx_logged_this_month');
 
   const { batchId } = await createPendingBatch(actor, source, drafts);
   r.text(opts.prefix, drafts.length > 1 ? `I got ${drafts.length} entries:` : 'I got:', ...drafts.map(draftLine));
@@ -85,7 +98,23 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
   // Inflation Shield: capture old prices BEFORE confirm_batch overwrites cost_price_ngn.
   const shield = await marginShieldCandidate(actor, before);
 
-  await confirmBatch(batchId);
+  // Charge exactly 1 unit per confirmed message (atomic cap check in SQL). Over the cap → discard the pending entry.
+  const metered = countsTowardTxQuota(before[0]!.source_channel);
+  if (metered && !(await consumeQuota(actor.business, 'tx_logged_this_month', 1))) {
+    await undoBatch(batchId);
+    return quotaReply(actor, 'tx_logged_this_month');
+  }
+  let applied = 0;
+  try {
+    applied = await confirmBatch(batchId);
+  } catch (err) {
+    if (metered) await refundQuota(actor.business.id, 'tx_logged_this_month', 1);
+    throw err;
+  }
+  if (applied === 0) { // lost a race with a concurrent confirm: nothing was confirmed by us, so don't keep the charge
+    if (metered) await refundQuota(actor.business.id, 'tx_logged_this_month', 1);
+    return reply(actor.phone).text('Already saved ✅');
+  }
   const rows = await getBatchRows(batchId);
   const r = reply(actor.phone);
 
@@ -185,8 +214,22 @@ export async function acceptMarginShield(actor: Actor, productId: string, newPri
 
 export async function undoAndRespond(actor: Actor, batchId: string | null): Promise<Reply> {
   const r = reply(actor.phone);
-  if (!batchId || !(await undoBatch(batchId))) return r.text('Nothing to undo — UNDO works within 5 minutes of saving.');
+  const none = r.text('Nothing to undo — UNDO works within 5 minutes of saving.');
+  if (!batchId) return none;
+  const rows = await getBatchRows(batchId);
+  if (!rows.length || rows[0]!.business_id !== actor.business.id) return none;
+  const wasConfirmed = rows.some((t) => t.status === 'confirmed');
+  if (!(await undoBatch(batchId))) return none;
+  // An undone message is no longer a confirmed message → give the unit back.
+  if (wasConfirmed && countsTowardTxQuota(rows[0]!.source_channel)) await refundQuota(actor.business.id, 'tx_logged_this_month', 1);
   return r.text('↩️ Reversed. Nothing from that entry is counted.', await todayLine(actor.business.id));
+}
+
+/** "Ignore" on a pending entry (e.g. a flagged bank alert). Ownership-checked; nothing was charged yet. */
+export async function discardPending(actor: Actor, batchId: string): Promise<Reply> {
+  const rows = await getBatchRows(batchId);
+  if (rows.length && rows[0]!.business_id === actor.business.id) await undoBatch(batchId);
+  return reply(actor.phone).text('❌ Ignored. Nothing was recorded.');
 }
 
 // ───────────── Bank alert verification ─────────────
@@ -243,7 +286,7 @@ export function quotaReply(actor: Actor, metric: keyof typeof QUOTA_MSG): Reply 
 }
 
 export const QUOTA_MSG = {
-  tx_logged_this_month: (t: string) => `You've used all your ledger entries for this ${t === 'trial' ? 'trial' : 'month'}. Starter (₦5k/mo) gives you 250 — less than ₦20 a record.`,
+  tx_logged_this_month: (t: string) => `You've used all your logged messages for this ${t === 'trial' ? 'trial' : 'month'}. Starter (₦5k/mo) gives you 250 — each message can hold as many sales and expenses as you like.`,
   videos_used_this_month: (t: string) => `You've used your ${t === 'trial' ? 'trial' : 'monthly'} videos. Starter gives you 15 HD sales videos/month — one new ad every 2 days.`,
   ocr_scans_used_this_month: (t: string) => t === 'free_limited'
     ? 'Screenshot checking is on paid plans. One fake alert costs more than a year of Starter (₦5k/mo).'
