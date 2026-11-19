@@ -50,10 +50,11 @@ RETURNS TABLE (user_id UUID, business_id UUID, role TEXT) LANGUAGE sql AS $$
    WHERE u.is_active AND u.role = 'owner';
 $$;
 
--- PATCH: monthly advisor usage for free-tier gating (calendar month, Lagos time).
-CREATE OR REPLACE FUNCTION advisor_messages_this_month(p_business_id UUID)
-RETURNS INT LANGUAGE sql STABLE AS $$
-  SELECT COUNT(*)::INT FROM web_chat_messages
+-- PATCH: advisor usage + the free-tier limit, in ONE place so the API route and the UI can never disagree.
+-- Free limit applies to trial & free_limited (calendar month, Lagos time). To change it, edit free_limit here.
+CREATE OR REPLACE FUNCTION advisor_usage(p_business_id UUID)
+RETURNS TABLE (used INT, free_limit INT) LANGUAGE sql STABLE AS $$
+  SELECT COUNT(*)::INT, 3 FROM web_chat_messages
    WHERE business_id = p_business_id AND role = 'user'
      AND created_at >= date_trunc('month', NOW() AT TIME ZONE 'Africa/Lagos') AT TIME ZONE 'Africa/Lagos';
 $$;
@@ -76,4 +77,4 @@ $$;
 
 ALTER TABLE web_magic_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE web_chat_messages ENABLE ROW LEVEL SECURITY;
-REVOKE EXECUTE ON FUNCTION issue_magic_token, consume_magic_token, advisor_messages_this_month, ledger_series, purge_old_magic_tokens FROM anon, authenticated, PUBLIC;
+REVOKE EXECUTE ON FUNCTION issue_magic_token, consume_magic_token, advisor_usage, ledger_series, purge_old_magic_tokens FROM anon, authenticated, PUBLIC;

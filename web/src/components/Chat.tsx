@@ -11,15 +11,16 @@ const CHIPS = [
   'Draft a polite payment reminder for my biggest debtor',
 ];
 
-export default function Chat({ initial, tier, bot, freeLeft }: { initial: Msg[]; tier: string; bot: string; freeLeft: number | null }) {
+export default function Chat({ initial, tier, bot, freeLeft, freeLimit }: { initial: Msg[]; tier: string; bot: string; freeLeft: number | null; freeLimit: number }) {
   const [msgs, setMsgs] = useState<Msg[]>(initial);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<'limit' | 'slow' | 'fail' | null>(null);
+  const [notice, setNotice] = useState<'slow' | 'fail' | null>(null);
   const [left, setLeft] = useState(freeLeft);
   const [copied, setCopied] = useState<string | null>(null);
+  const exhausted = left !== null && left <= 0;
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
+  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [msgs, left]);
 
   async function send(text: string) {
     const message = text.trim();
@@ -30,7 +31,7 @@ export default function Chat({ initial, tier, bot, freeLeft }: { initial: Msg[];
     const rollback = () => setMsgs((m) => m.filter((x) => x.id !== uid && x.id !== aid));
     try {
       const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message }) });
-      if (res.status === 402) { rollback(); setNotice('limit'); setLeft(0); return; }
+      if (res.status === 402) { rollback(); setLeft(0); return; }
       if (res.status === 429) { rollback(); setInput(message); setNotice('slow'); return; }
       if (res.status === 401) { window.location.href = '/login'; return; }
       if (!res.ok || !res.body) { rollback(); setInput(message); setNotice('fail'); return; }
@@ -80,25 +81,27 @@ export default function Chat({ initial, tier, bot, freeLeft }: { initial: Msg[];
             </div>
           </div>
         ))}
+        {exhausted && !busy && (
+          <div className="rounded-2xl bg-royal p-4 text-white">
+            <p className="font-semibold">That was your {freeLimit === 1 ? 'free chat' : `${freeLimit}${' '}free chats`} this month.</p>
+            <p className="mt-1 text-sm text-blue-100">Keep the coaching going — one recovered debt pays for it.</p>
+            <a href={`https://wa.me/${bot}?text=${encodeURIComponent('STARTER')}`} className="mt-3 block rounded-xl bg-white px-3 py-3 text-center font-semibold text-royal">
+              Upgrade to Starter (₦5,000/mo) for Unlimited CFO Chat
+            </a>
+          </div>
+        )}
         <div ref={end} />
       </div>
 
-      {notice === 'limit' && (
-        <div className="mx-3 mb-2 rounded-2xl bg-royal p-4 text-white">
-          <p className="font-semibold">You’ve used your 10 free advisor chats this month.</p>
-          <p className="mt-1 text-sm text-blue-100">Starter (₦5,000/mo) gives you unlimited coaching — one saved debt pays for it.</p>
-          <a href={`https://wa.me/${bot}?text=${encodeURIComponent('PLANS')}`} className="mt-3 block rounded-xl bg-white py-2.5 text-center font-semibold text-royal">See plans on WhatsApp</a>
-        </div>
-      )}
       {notice === 'slow' && <p className="px-4 pb-1 text-xs text-alert">Slow down a little — try again in a minute.</p>}
       {notice === 'fail' && <p className="px-4 pb-1 text-xs text-alert" role="alert">Couldn’t get an answer. Your message wasn’t counted — please retry.</p>}
-      {left !== null && left > 0 && left <= 5 && <p className="px-4 pb-1 text-xs text-slate-400">{left} free {left === 1 ? 'chat' : 'chats'} left this month ({tier === 'trial' ? 'trial' : 'free plan'})</p>}
+      {left !== null && left > 0 && <p className="px-4 pb-1 text-xs text-slate-400">{left} free {left === 1 ? 'chat' : 'chats'} left this month ({tier === 'trial' ? 'trial' : 'free plan'})</p>}
 
       <form onSubmit={(e) => { e.preventDefault(); void send(input); }} className="flex items-end gap-2 border-t border-slate-100 bg-white px-3 py-2">
-        <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} maxLength={2000} placeholder="Ask your advisor…"
+        <textarea value={input} disabled={exhausted} onChange={(e) => setInput(e.target.value)} rows={1} maxLength={2000} placeholder={exhausted ? 'Upgrade to keep chatting' : 'Ask your advisor…'}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }}
           className="max-h-28 min-h-11 flex-1 resize-none rounded-2xl border border-slate-200 px-4 py-2.5 text-base outline-none focus:border-accent" />
-        <button disabled={busy || !input.trim()} aria-label="Send" className="grid h-11 w-11 place-items-center rounded-full bg-accent text-white disabled:opacity-40"><Send size={18} /></button>
+        <button disabled={busy || exhausted || !input.trim()} aria-label="Send" className="grid h-11 w-11 place-items-center rounded-full bg-accent text-white disabled:opacity-40"><Send size={18} /></button>
       </form>
     </div>
   );

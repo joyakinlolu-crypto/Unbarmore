@@ -8,7 +8,6 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-const FREE_MONTHLY_LIMIT = 10;
 const ERR = '\u0000ERR:';
 
 export async function POST(req: NextRequest) {
@@ -22,8 +21,10 @@ export async function POST(req: NextRequest) {
   // Tier gate (spec §5.B.2): unlimited on paid tiers, 10/month on trial & free_limited.
   const tier = session.business.subscription_tier;
   if (tier === 'trial' || tier === 'free_limited') {
-    const { data: used } = await db.rpc('advisor_messages_this_month', { p_business_id: businessId });
-    if (Number(used ?? 0) >= FREE_MONTHLY_LIMIT) return NextResponse.json({ error: 'limit', limit: FREE_MONTHLY_LIMIT }, { status: 402 });
+    // The limit (3/month) lives in SQL — advisor_usage() — so the route and the UI read the same number.
+    const { data: u } = await db.rpc('advisor_usage', { p_business_id: businessId });
+    const { used, free_limit } = ((u as { used: number; free_limit: number }[] | null)?.[0]) ?? { used: 0, free_limit: 3 };
+    if (used >= free_limit) return NextResponse.json({ error: 'limit', limit: free_limit }, { status: 402 });
   }
   // Burst guard: even "unlimited" shouldn't let a loop burn the Gemini bill.
   const { count: recent } = await db.from('web_chat_messages').select('id', { count: 'exact', head: true })

@@ -14,7 +14,7 @@ import { PLANS } from '../config/plans.js';
 import { ngn, ngnShort, watDateKey, watDayStart, watWeekKey } from '../lib/money.js';
 import { periodRange } from '../flows/insights.js';
 import { linesToDrafts, draftLine } from '../flows/ledger.js';
-import { reply } from '../services/whatsapp.js';
+import { reply, templateComponents } from '../services/whatsapp.js';
 import { verifyMetaSignature } from '../services/whatsapp.js';
 import { verifyPaystackSignature } from '../services/paystack.js';
 import { receiptPdf, weeklyStatementPdf } from '../services/pdfGenerator.js';
@@ -124,5 +124,20 @@ describe('PDF generation', () => {
     });
     expect(s.subarray(0, 4).toString()).toBe('%PDF');
     expect(r.length).toBeGreaterThan(2000);
+  });
+});
+
+describe('Meta template components', () => {
+  const tok = 'ab'.repeat(32);
+  it('URL button carries the per-user token at index 0; quick replies shift to 1..3', () => {
+    const c = templateComponents(['Ada', '₦500k'], ['BTN_CHASE_DEBT', 'BTN_DEADSTOCK_PROMO', 'BTN_EXPORT_PDF'], tok);
+    expect(c[1]).toEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: tok }] });
+    expect(c.slice(2).map((x: any) => [x.sub_type, x.index, x.parameters[0].payload])).toEqual([
+      ['quick_reply', '1', 'BTN_CHASE_DEBT'], ['quick_reply', '2', 'BTN_DEADSTOCK_PROMO'], ['quick_reply', '3', 'BTN_EXPORT_PDF'],
+    ]);
+  });
+  it('without a token, quick replies start at index 0', () => {
+    const c = templateComponents(['x'], ['A', 'B']);
+    expect(c.map((x: any) => x.index)).toEqual([undefined, '0', '1']);
   });
 });

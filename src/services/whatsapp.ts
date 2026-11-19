@@ -188,19 +188,34 @@ export const reply = (to: string) => new Reply(to);
 
 // ───────────── Templates (paid; outside 24h window) ─────────────
 
+/**
+ * Template components. Button order must match the order defined in Meta Business Manager:
+ *   index 0      → dynamic URL button  (https://app.unbarmore.com/auth/verify?token={{1}}), optional
+ *   index 1..n   → quick-reply buttons (BTN_CHASE_DEBT, BTN_DEADSTOCK_PROMO, BTN_EXPORT_PDF)
+ * With no URL button, quick replies start at index 0.
+ */
+export function templateComponents(bodyParams: string[], quickReplyPayloads: string[] = [], urlToken?: string): Record<string, unknown>[] {
+  const offset = urlToken ? 1 : 0;
+  return [
+    { type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: t })) },
+    ...(urlToken ? [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: urlToken }] }] : []),
+    ...quickReplyPayloads.map((payload, i) => ({
+      type: 'button', sub_type: 'quick_reply', index: String(i + offset), parameters: [{ type: 'payload', payload }],
+    })),
+  ];
+}
+
 export async function sendTemplate(
   to: string,
   name: string,
   bodyParams: string[],
   quickReplyPayloads: string[] = [],
+  urlToken?: string,
 ): Promise<string | null> {
-  const components: Record<string, unknown>[] = [
-    { type: 'body', parameters: bodyParams.map((t) => ({ type: 'text', text: t })) },
-    ...quickReplyPayloads.map((payload, index) => ({
-      type: 'button', sub_type: 'quick_reply', index: String(index), parameters: [{ type: 'payload', payload }],
-    })),
-  ];
-  return sendRaw(to, { type: 'template', template: { name, language: { code: env.WHATSAPP_TEMPLATE_LANG }, components } });
+  return sendRaw(to, {
+    type: 'template',
+    template: { name, language: { code: env.WHATSAPP_TEMPLATE_LANG }, components: templateComponents(bodyParams, quickReplyPayloads, urlToken) },
+  });
 }
 
 // ───────────── Media download ─────────────

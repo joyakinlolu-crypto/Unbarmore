@@ -253,6 +253,13 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
       'One tap, no password. Link works once and expires in 15 minutes. Add it to your Home Screen to open it like an app.',
     );
   }
+  if (upper === 'STARTER') {
+    const link = await createCheckoutLink(b, 'starter_5k', 'monthly');
+    return reply(actor.phone).text(
+      `Tap to pay *${ngn(link.amountNgn)}*${link.walletApplied ? ` (${ngn(link.walletApplied)} wallet applied)` : ''} for Starter — card, transfer or USSD:`,
+      link.url, '', 'Unlimited CFO chat + 15 videos + voice notes + fake-alert checks. Activates the moment payment lands. ✅',
+    );
+  }
   if (upper === 'CHASE') return chaseDebtsReply(actor);
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);

@@ -149,3 +149,23 @@ describe('advisor snapshot (fixes to the supplied draft)', () => {
     expect(prompt).toContain('cost ₦15,000 -> ₦17,000');
   });
 });
+
+import Chat from '@/components/Chat';
+describe('free-tier upgrade CTA (limit = 3)', () => {
+  const msgs = [{ id: '1', role: 'user' as const, content: 'q' }, { id: '2', role: 'assistant' as const, content: 'a' }];
+  it('shows the Starter CTA and locks the input once the free chats are used up', () => {
+    const html = renderToStaticMarkup(<Chat initial={msgs} tier="trial" bot="2348000000000" freeLeft={0} freeLimit={3} />);
+    expect(html).toContain('Upgrade to Starter (₦5,000/mo) for Unlimited CFO Chat');
+    expect(html).toContain('That was your 3 free chats this month.');
+    expect(html).toContain('wa.me/2348000000000?text=STARTER');
+    expect(html).toMatch(/<textarea[^>]*disabled/);
+  });
+  it('shows a counter, no CTA, while chats remain; and nothing for paid tiers', () => {
+    const some = renderToStaticMarkup(<Chat initial={msgs} tier="trial" bot="1" freeLeft={1} freeLimit={3} />);
+    expect(some).toContain('1 free chat left');
+    expect(some).not.toContain('Unlimited CFO Chat');
+    const paid = renderToStaticMarkup(<Chat initial={msgs} tier="starter_5k" bot="1" freeLeft={null} freeLimit={3} />);
+    expect(paid).not.toContain('Unlimited CFO Chat');
+    expect(paid).not.toContain('free chat');
+  });
+});

@@ -4,7 +4,7 @@ import { PLANS } from '../config/plans.js';
 import { claimOutbound, consumeQuota, db, isInServiceWindow, ledgerSummary, type Business } from '../db/supabase.js';
 import { cronQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey, watWeekKey } from '../lib/money.js';
-import { createOwnerMagicLink } from '../services/webLink.js';
+import { createOwnerMagicLink, createOwnerMagicToken } from '../services/webLink.js';
 import { reply, sendTemplate } from '../services/whatsapp.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
@@ -115,9 +115,12 @@ async function sundayCeo(): Promise<void> {
         r.button('BTN_EXPORT_PDF', '📄 Export PDF');
         await r.send();
       } else {
+        // The approved template has a dynamic URL button (…/auth/verify?token={{1}}) → per-user one-tap login.
+        // If throttled we still must supply a value; a non-hex placeholder lands on the harmless "link expired → LOGIN" page.
+        const token = (await createOwnerMagicToken(biz.id).catch(() => null)) ?? 'expired';
         await sendTemplate(
           biz.owner_phone, env.WHATSAPP_CEO_TEMPLATE, reportTemplateParams(biz, rep),
-          ['BTN_CHASE_DEBT', 'BTN_DEADSTOCK_PROMO', 'BTN_EXPORT_PDF'],
+          ['BTN_CHASE_DEBT', 'BTN_DEADSTOCK_PROMO', 'BTN_EXPORT_PDF'], token,
         );
       }
     } catch (err) {
