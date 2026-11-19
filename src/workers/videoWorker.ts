@@ -1,0 +1,274 @@
+import { Worker, type Job } from 'bullmq';
+import ffmpeg from 'fluent-ffmpeg';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { env } from '../config/env.js';
+import { PLANS } from '../config/plans.js';
+import { db, downloadFile, getBusiness, getProduct, refundQuota, signedUrl, uploadFile } from '../db/supabase.js';
+import { QUEUE, redisConnection, type VideoJob } from '../lib/queues.js';
+import { ngn } from '../lib/money.js';
+import { writeVideoScript, type VideoScript } from '../services/geminiBrain.js';
+import { enhanceProductPhoto, type StudioTheme } from '../services/imageStudio.js';
+import { synthesizeVoiceover } from '../services/ttsService.js';
+import { reply } from '../services/whatsapp.js';
+
+const W = 1080;
+const H = 1920;
+const FPS = 30;
+const MAX_BYTES = 3.5 * 1024 * 1024;
+
+// ═════════════════════════ PURE RENDERER (testable without network) ═════════════════════════
+
+export interface RenderInput {
+  images: string[];            // local file paths, already cleaned
+  voiceover: string | null;    // local mp3 path
+  bgm: string | null;          // local instrumental path
+  captions: string[];          // 3 lines
+  priceText: string | null;    // "₦15,000"
+  orderCode: string;           // "UNB-7K2"
+  watermark: 'full' | 'subtle' | 'none';
+  clearance: boolean;
+  fontPath: string;
+  outPath: string;
+  workDir: string;
+}
+
+const probeDuration = (file: string) =>
+  new Promise<number>((resolve, reject) =>
+    ffmpeg.ffprobe(file, (err, data) => (err ? reject(err) : resolve(Number(data.format.duration ?? 0)))));
+
+/** drawtext reads text from files — sidesteps FFmpeg's escaping rules for ₦, quotes, colons and emoji-less Pidgin. */
+async function textFile(dir: string, name: string, text: string): Promise<string> {
+  const p = path.join(dir, `${name}.txt`);
+  await fs.writeFile(p, text, 'utf8');
+  return p.replace(/\\/g, '/').replace(/:/g, '\\:');
+}
+
+export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<{ bytes: number; duration: number }> {
+  const voiceDur = input.voiceover ? await probeDuration(input.voiceover) : 0;
+  const endCard = input.watermark === 'full' ? 1.6 : 0;
+  const total = Math.min(20, Math.max(15, voiceDur + 1.2 + endCard));
+  const n = input.images.length;
+  const seg = (total - endCard) / n;
+  const segFrames = Math.ceil(seg * FPS);
+  const font = input.fontPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+  const filters: string[] = [];
+  // 1) Ken Burns per image: cover-crop to 9:16 at 2x for smooth sub-pixel zoom, alternate zoom-in / zoom-out.
+  input.images.forEach((_, i) => {
+    const zoom = i % 2 === 0 ? `min(1+0.10*on/${segFrames},1.10)` : `max(1.10-0.10*on/${segFrames},1.0)`;
+    filters.push(
+      `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,crop=${W * 2}:${H * 2},setsar=1,` +
+      `zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segFrames}:s=${W}x${H}:fps=${FPS},` +
+      `trim=duration=${seg.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[v${i}]`,
+    );
+  });
+  // 2) Cross-fade between photos.
+  const xf = 0.35;
+  let last = 'v0';
+  let offset = seg - xf;
+  for (let i = 1; i < n; i++) {
+    filters.push(`[${last}][v${i}]xfade=transition=fade:duration=${xf}:offset=${offset.toFixed(3)}[x${i}]`);
+    last = `x${i}`;
+    offset += seg - xf;
+  }
+  const slidesDur = seg * n - xf * (n - 1);
+  // 3) End card (watermark tier) — dark brand frame appended.
+  if (endCard > 0) {
+    filters.push(`color=c=0x0B1F17:s=${W}x${H}:r=${FPS}:d=${endCard},format=yuv420p[end]`);
+    filters.push(`[${last}][end]concat=n=2:v=1:a=0[vc]`);
+    last = 'vc';
+  }
+
+  // 4) Overlays.
+  const draw: string[] = [];
+  const capT = (slidesDur - 0.2) / Math.max(1, input.captions.length);
+  for (const [i, cap] of input.captions.entries()) {
+    const tf = await textFile(input.workDir, `cap${i}`, cap.toUpperCase());
+    draw.push(
+      `drawtext=fontfile='${font}':textfile='${tf}':fontsize=74:fontcolor=white:borderw=6:bordercolor=black@0.85:` +
+      `box=1:boxcolor=black@0.35:boxborderw=28:x=(w-text_w)/2:y=h*0.13:enable='between(t,${(i * capT).toFixed(2)},${((i + 1) * capT).toFixed(2)})'`,
+    );
+  }
+  if (input.priceText) {
+    const tf = await textFile(input.workDir, 'price', input.clearance ? `NOW ${input.priceText}` : input.priceText);
+    draw.push(
+      `drawtext=fontfile='${font}':textfile='${tf}':fontsize=86:fontcolor=0x0B1F17:box=1:boxcolor=0xFFD23F:boxborderw=26:` +
+      `x=w-text_w-70:y=h*0.62:enable='gte(t,0.6)*lt(t,${slidesDur.toFixed(2)})'`,
+    );
+  }
+  if (input.clearance) {
+    const tf = await textFile(input.workDir, 'flash', '48-HOUR FLASH SALE');
+    draw.push(`drawtext=fontfile='${font}':textfile='${tf}':fontsize=58:fontcolor=white:box=1:boxcolor=0xD92D20:boxborderw=20:x=(w-text_w)/2:y=h*0.06:enable='lt(t,${slidesDur.toFixed(2)})'`);
+  }
+  const ctaFile = await textFile(input.workDir, 'cta', `Send ${input.orderCode} on WhatsApp to order`);
+  draw.push(
+    `drawtext=fontfile='${font}':textfile='${ctaFile}':fontsize=40:fontcolor=white:box=1:boxcolor=0x0E7A4F@0.92:boxborderw=24:` +
+    `x=(w-text_w)/2:y=h*0.84:enable='lt(t,${slidesDur.toFixed(2)})'`,
+  );
+  if (input.watermark === 'full') {
+    const a = await textFile(input.workDir, 'wm1', `Order code: ${input.orderCode}`);
+    const b = await textFile(input.workDir, 'wm2', 'Made with Unbarmore');
+    const c = await textFile(input.workDir, 'wm3', 'unbarmore.com');
+    const at = `enable='gte(t,${slidesDur.toFixed(2)})'`;
+    draw.push(`drawtext=fontfile='${font}':textfile='${a}':fontsize=80:fontcolor=0xFFD23F:x=(w-text_w)/2:y=h*0.40:${at}`);
+    draw.push(`drawtext=fontfile='${font}':textfile='${b}':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=h*0.52:${at}`);
+    draw.push(`drawtext=fontfile='${font}':textfile='${c}':fontsize=44:fontcolor=white@0.7:x=(w-text_w)/2:y=h*0.58:${at}`);
+  } else if (input.watermark === 'subtle') {
+    const b = await textFile(input.workDir, 'wm', 'unbarmore.com');
+    draw.push(`drawtext=fontfile='${font}':textfile='${b}':fontsize=30:fontcolor=white@0.55:x=w-text_w-36:y=h-text_h-40:enable='gte(t,${(slidesDur - 2.5).toFixed(2)})'`);
+  }
+  filters.push(`[${last}]${draw.join(',')}[vout]`);
+
+  // 5) Audio: voiceover delayed 0.4s; instrumental ducked under voice (sidechain) and faded out.
+  const audioIdx = n;
+  let aMap: string | null = null;
+  if (input.voiceover && input.bgm) {
+    filters.push(`[${audioIdx}:a]adelay=400|400,apad,atrim=duration=${total.toFixed(2)},aformat=channel_layouts=stereo,asplit=2[vo][sc]`);
+    filters.push(`[${audioIdx + 1}:a]aloop=loop=-1:size=2e9,atrim=duration=${total.toFixed(2)},volume=0.55,aformat=channel_layouts=stereo,afade=t=out:st=${(total - 1.2).toFixed(2)}:d=1.2[bg]`);
+    filters.push(`[bg][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=350[duck]`);
+    filters.push(`[vo][duck]amix=inputs=2:duration=first:normalize=0[aout]`);
+    aMap = '[aout]';
+  } else if (input.voiceover) {
+    filters.push(`[${audioIdx}:a]adelay=400|400,apad,atrim=duration=${total.toFixed(2)}[aout]`);
+    aMap = '[aout]';
+  } else if (input.bgm) {
+    filters.push(`[${audioIdx}:a]atrim=duration=${total.toFixed(2)},afade=t=out:st=${(total - 1.2).toFixed(2)}:d=1.2[aout]`);
+    aMap = '[aout]';
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const cmd = ffmpeg();
+    for (const img of input.images) cmd.input(img).inputOptions(['-loop 1', `-t ${seg + 0.5}`, `-framerate ${FPS}`]);
+    if (input.voiceover) cmd.input(input.voiceover);
+    if (input.bgm) cmd.input(input.bgm);
+    cmd
+      .complexFilter(filters.join(';'))
+      .outputOptions([
+        '-map [vout]',
+        ...(aMap ? [`-map ${aMap}`] : []),
+        '-c:v libx264', '-preset veryfast', '-profile:v high', '-level 4.1', '-pix_fmt yuv420p',
+        '-crf 27', `-maxrate ${maxrateK}k`, `-bufsize ${maxrateK * 2}k`, `-r ${FPS}`, '-g 60',
+        ...(aMap ? ['-c:a aac', '-b:a 96k', '-ar 44100'] : ['-an']),
+        `-t ${total.toFixed(2)}`,
+        '-movflags +faststart',
+        '-threads 0',
+      ])
+      .on('error', (err, _o, stderr) => reject(new Error(`${err.message}\n${String(stderr).slice(-1500)}`)))
+      .on('end', () => resolve())
+      .save(input.outPath);
+  });
+
+  const { size } = await fs.stat(input.outPath);
+  // Mobile-data budget: if over 3.5MB, re-encode once at a computed lower bitrate.
+  if (size > MAX_BYTES && maxrateK > 500) {
+    const target = Math.floor(((MAX_BYTES * 8) / total / 1000 - 110) * 0.92);
+    return renderVideo(input, Math.max(500, target));
+  }
+  return { bytes: size, duration: total };
+}
+
+async function pickBgm(): Promise<string | null> {
+  try {
+    const files = (await fs.readdir(env.BGM_DIR)).filter((f) => /\.(mp3|m4a|aac|wav|ogg)$/i.test(f));
+    if (!files.length) return null;
+    return path.join(env.BGM_DIR, files[Math.floor(Math.random() * files.length)]!);
+  } catch {
+    return null;
+  }
+}
+
+// ═════════════════════════ JOB ═════════════════════════
+
+async function processVideo(job: Job<VideoJob>): Promise<void> {
+  const { videoId, businessId, phone } = job.data;
+  const { data: row, error } = await db.from('video_jobs').select('*').eq('id', videoId).single();
+  if (error || !row) throw new Error(`video_jobs ${videoId} not found`);
+  if (row.status === 'completed') return;
+
+  await db.from('video_jobs').update({ status: 'processing' }).eq('id', videoId);
+  const business = await getBusiness(businessId);
+  const product = await getProduct(row.product_id as string);
+  const plan = PLANS[business.subscription_tier];
+  const theme: StudioTheme = plan.themes ? business.studio_theme : 'clean_minimalist';
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `unb-${videoId.slice(0, 8)}-`));
+
+  try {
+    // Step 1 — studio enhancement (parallel, keep originals on failure)
+    const raw = (row.raw_image_urls as string[]).slice(0, 5);
+    const cleanedPaths: string[] = [];
+    const localImages = await Promise.all(raw.map(async (p, i) => {
+      const data = await downloadFile('raw-images', p);
+      const ext = p.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      const enhanced = await enhanceProductPhoto({ data, mimeType }, theme);
+      const outExt = enhanced.mimeType.includes('png') ? 'png' : 'jpg';
+      const local = path.join(workDir, `img${i}.${outExt}`);
+      await fs.writeFile(local, enhanced.data);
+      if (enhanced.enhanced) cleanedPaths[i] = await uploadFile('cleaned-images', `${businessId}/${videoId}-${i}.${outExt}`, enhanced.data, enhanced.mimeType);
+      return local;
+    }));
+    await db.from('video_jobs').update({ cleaned_image_urls: cleanedPaths.filter(Boolean) }).eq('id', videoId);
+
+    // Step 2 — script + Nigerian voiceover
+    const price = Number(product.selling_price_ngn) || null;
+    const script: VideoScript = await writeVideoScript({
+      businessName: business.name, productName: product.name, priceNgn: price, deliveryInfo: row.delivery_info as string | null,
+      orderCode: product.sku_code, clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin',
+    });
+    let voicePath: string | null = path.join(workDir, 'vo.mp3');
+    try {
+      const mp3 = await synthesizeVoiceover(script.voiceover, { pidgin: script.pidgin });
+      await fs.writeFile(voicePath, mp3);
+      const audioPath = await uploadFile('videos', `${businessId}/${videoId}.mp3`, mp3, 'audio/mpeg');
+      await db.from('video_jobs').update({ audio_url: audioPath }).eq('id', videoId);
+    } catch (e) {
+      console.warn('[video] TTS failed, rendering music-only', e);
+      voicePath = null;
+    }
+    await db.from('video_jobs').update({ promo_hook: script.hook, generated_script: script.voiceover }).eq('id', videoId);
+
+    // Step 3 — assemble
+    const outPath = path.join(workDir, 'out.mp4');
+    const { bytes } = await renderVideo({
+      images: localImages, voiceover: voicePath, bgm: await pickBgm(), captions: script.captions.slice(0, 3),
+      priceText: price ? ngn(price) : null, orderCode: product.sku_code, watermark: row.include_watermark ? plan.watermark === 'none' ? 'subtle' : plan.watermark : 'none',
+      clearance: row.is_clearance as boolean, fontPath: path.resolve(env.FONT_PATH), outPath, workDir,
+    });
+
+    // Step 4 — upload & deliver as ONE video message
+    const videoPath = await uploadFile('videos', `${businessId}/${videoId}.mp4`, await fs.readFile(outPath), 'video/mp4');
+    await db.from('video_jobs').update({ status: 'completed', final_video_url: videoPath }).eq('id', videoId);
+
+    await reply(phone)
+      .video(await signedUrl('videos', videoPath, 6 * 3600))
+      .text(
+        `🎬 *${product.name}*${price ? ` — ${ngn(price)}` : ''} · Order code *${product.sku_code}*`,
+        '',
+        '👉 Post to your Status & forward to customers.',
+        `When a customer sends *${product.sku_code}*, reply _"sold 1 ${product.sku_code}"_ and I'll log it.`,
+        `_(${(bytes / 1024 / 1024).toFixed(1)}MB — light on data)_`,
+      )
+      .send();
+  } catch (err) {
+    const final = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+    await db.from('video_jobs').update({ status: final ? 'failed' : 'queued', error_message: String(err).slice(0, 2000) }).eq('id', videoId);
+    if (final) {
+      await refundQuota(businessId, 'videos_used_this_month');
+      await reply(phone).text(`😓 Your video for ${product.name} failed to render. It didn't count against your plan — send the photos again.`).send().catch(() => undefined);
+    }
+    throw err;
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
+  }
+}
+
+export function startVideoWorker() {
+  // Rendering is CPU-bound: 1–2 per vCPU. Scale horizontally by running more PROCESS_ROLE=workers containers.
+  return new Worker<VideoJob>(QUEUE.video, processVideo, {
+    connection: redisConnection,
+    concurrency: Math.max(1, Math.floor(os.cpus().length / 2)),
+    lockDuration: 5 * 60_000,
+  });
+}

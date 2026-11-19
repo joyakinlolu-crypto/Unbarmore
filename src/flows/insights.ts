@@ -1,0 +1,104 @@
+/**
+ * Every number a user sees is computed here from PostgreSQL. The LLM only chooses WHICH query.
+ */
+import {
+  debtors, deadStock, expensesByCategory, ledgerSummary, lowStock, topProducts, type Business,
+} from '../db/supabase.js';
+import { ngn, watDayStart } from '../lib/money.js';
+
+export type Period = 'today' | 'yesterday' | 'this_week' | 'last_week' | 'this_month' | 'last_month';
+
+export function periodRange(p: Period, now = new Date()): { from: Date; to: Date; label: string } {
+  const day = watDayStart(now);
+  const D = 86400_000;
+  // WAT weekday (Mon=0)
+  const watNow = new Date(now.getTime() + 3600_000);
+  const dow = (watNow.getUTCDay() + 6) % 7;
+  const weekStart = new Date(day.getTime() - dow * D);
+  const monthStart = (() => {
+    const m = new Date(Date.UTC(watNow.getUTCFullYear(), watNow.getUTCMonth(), 1));
+    return new Date(m.getTime() - 3600_000);
+  })();
+  const prevMonthStart = (() => {
+    const m = new Date(Date.UTC(watNow.getUTCFullYear(), watNow.getUTCMonth() - 1, 1));
+    return new Date(m.getTime() - 3600_000);
+  })();
+  switch (p) {
+    case 'today': return { from: day, to: new Date(day.getTime() + D), label: 'today' };
+    case 'yesterday': return { from: new Date(day.getTime() - D), to: day, label: 'yesterday' };
+    case 'this_week': return { from: weekStart, to: new Date(day.getTime() + D), label: 'this week' };
+    case 'last_week': return { from: new Date(weekStart.getTime() - 7 * D), to: weekStart, label: 'last week' };
+    case 'this_month': return { from: monthStart, to: new Date(day.getTime() + D), label: 'this month' };
+    case 'last_month': return { from: prevMonthStart, to: monthStart, label: 'last month' };
+  }
+}
+
+export const daysSince = (iso: string | null) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400_000)) : 0);
+
+export async function todayLine(businessId: string): Promise<string> {
+  const { from, to } = periodRange('today');
+  const s = await ledgerSummary(businessId, from, to);
+  return `📊 Today: Sales ${ngn(s.revenue_ngn)} · Spent ${ngn(s.expenses_ngn + s.restock_ngn)} · Profit *${ngn(s.net_profit_ngn)}*`;
+}
+
+export async function answerQuery(
+  b: Business,
+  q: { kind: string; period?: Period; product_name?: string },
+): Promise<string> {
+  const period = q.period ?? (q.kind === 'cash_today' ? 'today' : 'this_week');
+  const { from, to, label } = periodRange(period);
+
+  switch (q.kind) {
+    case 'profit':
+    case 'cash_today': {
+      const s = await ledgerSummary(b.id, from, to);
+      if (s.tx_count === 0) return `No confirmed records ${label} yet. Send a voice note like "sold 2 lace 50k" to start.`;
+      return [
+        `*${b.name} — ${label}*`,
+        `Sales: ${ngn(s.revenue_ngn)}`,
+        `Expenses: ${ngn(s.expenses_ngn)}`,
+        `Stock bought: ${ngn(s.restock_ngn)}`,
+        `*Net profit: ${ngn(s.net_profit_ngn)}*`,
+        `Cash/transfer received: ${ngn(s.cash_in_ngn)}${s.debt_collected_ngn ? ` (incl. ${ngn(s.debt_collected_ngn)} old debts)` : ''}`,
+      ].join('\n');
+    }
+    case 'debtors': {
+      const list = await debtors(b.id, 15);
+      if (!list.length) return '🎉 Nobody owes you money right now.';
+      const total = list.reduce((s, d) => s + d.outstanding_debt_ngn, 0);
+      return [
+        `*Customers owing you — ${ngn(total)} total*`,
+        ...list.map((d, i) => `${i + 1}. ${d.name} — ${ngn(d.outstanding_debt_ngn)}${d.debt_since ? ` (${daysSince(d.debt_since)}d)` : ''}`),
+        '',
+        'Reply *CHASE* for ready-to-forward reminder messages.',
+      ].join('\n');
+    }
+    case 'top_products': {
+      const list = await topProducts(b.id, from, to, 5);
+      if (!list.length) return `No sales recorded ${label}.`;
+      return [`*Best sellers ${label}*`, ...list.map((p, i) => `${i + 1}. ${p.name} — ${p.qty} sold · ${ngn(p.revenue)}`)].join('\n');
+    }
+    case 'dead_stock': {
+      const list = await deadStock(b.id);
+      if (!list.length) return 'No dead stock — everything has sold in the last 21 days. 💪';
+      return [
+        '*Not moving (21+ days)*',
+        ...list.map((p) => `• ${p.name} — ${p.stock_qty} left, ${daysSince(p.last_sold_at)}d since last sale`),
+        '',
+        'Reply *PROMO* and I\'ll make a 48-hour flash-sale video for the oldest one.',
+      ].join('\n');
+    }
+    case 'expenses_by_category': {
+      const list = await expensesByCategory(b.id, from, to);
+      if (!list.length) return `No expenses recorded ${label}.`;
+      return [`*Expenses ${label}*`, ...list.map((e) => `• ${e.category}: ${ngn(e.amount)}`)].join('\n');
+    }
+    case 'stock_level': {
+      const list = await lowStock(b.id, q.product_name);
+      if (!list.length) return q.product_name ? `I don't have "${q.product_name}" yet. Log a restock like "bought 10 ${q.product_name} 4k each".` : 'No products yet.';
+      return ['*Stock left*', ...list.map((p) => `• ${p.name}: ${Math.max(0, Number(p.stock_qty))}`)].join('\n');
+    }
+    default:
+      return 'I can tell you: profit, who owes you, best sellers, dead stock, expenses, stock left.';
+  }
+}

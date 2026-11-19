@@ -1,0 +1,531 @@
+import { DelayedError, Worker, type Job } from 'bullmq';
+import { Redis } from 'ioredis';
+import { z } from 'zod';
+import { env } from '../config/env.js';
+import { PLANS, PRICES_NGN } from '../config/plans.js';
+import {
+  addStaff, claimMessageId, findBusinessByReferralCode, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
+  resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, refundQuota, getBatchRows, createBusiness,
+  type Actor, type Session,
+} from '../db/supabase.js';
+import { imageBatchQueue, QUEUE, redisConnection } from '../lib/queues.js';
+import { ngn, watDateKey } from '../lib/money.js';
+import { generateStructured, readBankAlert, routeMessage, type BrainResult } from '../services/geminiBrain.js';
+import { connectSheet, extractSheetId, SHEETS_SERVICE_EMAIL } from '../services/googleSheets.js';
+import { createCheckoutLink, requestPayout } from '../services/paystack.js';
+import { downloadMedia, markReadWithTyping, reply, type Reply, type WaInboundMessage } from '../services/whatsapp.js';
+import { answerQuery } from '../flows/insights.js';
+import {
+  acceptMarginShield, bankAlertReply, confirmAndRespond, linesToDrafts, proposeBatch, quotaReply, undoAndRespond,
+} from '../flows/ledger.js';
+import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/reports.js';
+import { startVideo } from '../flows/video.js';
+
+export interface InboundJob { msg: WaInboundMessage; profileName: string | null }
+
+const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+const IMG_KEY = (phone: string) => `img_buffer:${phone}`;
+const LOCK_KEY = (phone: string) => `lock:msg:${phone}`;
+
+// ═════════════════════════ ENTRY ═════════════════════════
+
+async function processInbound(job: Job<InboundJob>, token?: string): Promise<void> {
+  const { msg, profileName } = job.data;
+  const phone = msg.from;
+
+  // Idempotency for Meta re-deliveries — only on the first attempt so our own retries still run.
+  if (job.attemptsMade === 0 && !(await claimMessageId(msg.id))) return;
+
+  // Per-user serialisation: a "Confirm" tap must never overtake the message that created the batch.
+  const locked = await redis.set(LOCK_KEY(phone), job.id ?? '1', 'PX', 60_000, 'NX');
+  if (!locked) {
+    await job.moveToDelayed(Date.now() + 400, token);
+    throw new DelayedError();
+  }
+  try {
+    void markReadWithTyping(msg.id);
+    const r = await handle(msg, profileName);
+    if (r && !r.isEmpty) await r.send();
+  } finally {
+    await redis.del(LOCK_KEY(phone));
+  }
+}
+
+async function handle(msg: WaInboundMessage, profileName: string | null): Promise<Reply | null> {
+  const phone = msg.from;
+  const actor = await resolveActor(phone);
+  let session = await getSession(phone);
+
+  if (!actor) return onboarding(msg, session, profileName);
+
+  // Images are debounced (3–5 product photos arrive as separate webhooks within milliseconds).
+  if (msg.type === 'image' && msg.image) {
+    await redis.multi()
+      .rpush(IMG_KEY(phone), JSON.stringify({ mediaId: msg.image.id, caption: msg.image.caption ?? '', mime: msg.image.mime_type }))
+      .pexpire(IMG_KEY(phone), 120_000)
+      .exec();
+    await imageBatchQueue.add('flush', { phone }, {
+      delay: 4000,
+      // Sliding 4s window: every new photo replaces the pending flush and restarts the timer.
+      deduplication: { id: `img:${phone}`, ttl: 4000, extend: true, replace: true },
+    });
+    return null;
+  }
+
+  const buttonId = msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id ?? msg.button?.payload ?? null;
+  if (buttonId) return onButton(actor, buttonId, session);
+
+  // Edit flow: whatever comes next (text OR voice) replaces the pending batch.
+  if (session.current_state === 'AWAITING_TX_EDIT' && (msg.type === 'text' || msg.type === 'audio')) {
+    const old = session.pending_payload.batch_id as string;
+    const oldRows = await getBatchRows(old);
+    if (await undoBatch(old)) await refundQuota(actor.business.id, 'tx_logged_this_month', oldRows.length);
+    await setSession(phone, 'IDLE', {});
+    session = { ...session, current_state: 'IDLE', pending_payload: {} };
+  }
+
+  const text = msg.text?.body?.trim() ?? '';
+  if (text) {
+    const cmd = await onCommand(actor, text, session);
+    if (cmd) return cmd;
+    const stateful = await onState(actor, text, session);
+    if (stateful) return stateful;
+  }
+
+  if (msg.type === 'audio' && msg.audio) {
+    if (!PLANS[actor.business.subscription_tier].voiceNotes) {
+      return reply(phone)
+        .text('🎙️ Voice notes are on Starter (₦5k/mo). On the free plan, just type it: _"sold 2 lace 50k transfer"_')
+        .button('PLANS', '⭐ See plans');
+    }
+    const audio = await downloadMedia(msg.audio.id);
+    return runBrain(actor, { audio }, session);
+  }
+  if (msg.type === 'document' && msg.document?.mime_type?.startsWith('image/')) {
+    const image = await downloadMedia(msg.document.id);
+    return runBrain(actor, { image: { ...image, caption: msg.document.caption } }, session);
+  }
+  if (text) return runBrain(actor, { text }, session);
+
+  return reply(phone).text('I can read text, voice notes and photos. Try: _"sold 3 Ankara 45k cash"_');
+}
+
+// ═════════════════════════ ONBOARDING (2 steps, zero catalogue) ═════════════════════════
+
+const REF_RE = /\bUNBAR-[A-Z2-9]{4}\b/i;
+
+async function onboarding(msg: WaInboundMessage, session: Session, profileName: string | null): Promise<Reply> {
+  const phone = msg.from;
+  const text = msg.text?.body?.trim() ?? '';
+  const button = msg.interactive?.button_reply?.id;
+
+  // Staff number not yet added, or an ex-staff of a downgraded business.
+  if (session.current_state === 'IDLE' || !['ONBOARDING_NAME', 'ONBOARDING_REFERRAL'].includes(session.current_state)) {
+    // Referral deep link: wa.me/<bot>?text=Hi%20UNBAR-XXXX — capture it so step 2 is skipped.
+    const code = text.match(REF_RE)?.[0]?.toUpperCase() ?? null;
+    await setSession(phone, 'ONBOARDING_NAME', { referral_code: code });
+    return reply(phone).text(
+      `👋 Welcome to *Unbarmore*${profileName ? `, ${profileName.split(' ')[0]}` : ''}!`,
+      'I make your sales videos, track your money from voice notes, and catch fake transfer alerts — all inside WhatsApp.',
+      '',
+      code ? `🎁 Referral code ${code} saved — you both get ₦1,000 when you subscribe.` : '',
+      '*What is your business name?*',
+    );
+  }
+
+  if (session.current_state === 'ONBOARDING_NAME') {
+    const name = text.replace(/\s+/g, ' ').slice(0, 80);
+    if (name.length < 2) return reply(phone).text('Please type your business name (e.g. _Ada Fabrics_).');
+    const biz = await createBusiness(phone, name, profileName);
+    const savedCode = (session.pending_payload.referral_code as string | null) ?? null;
+    if (savedCode) {
+      const ok = await applyReferral(biz.id, savedCode);
+      await setSession(phone, 'IDLE', {}, biz.id);
+      return welcomeDone(phone, name, biz.referral_code, ok ? savedCode : null);
+    }
+    await setSession(phone, 'ONBOARDING_REFERRAL', {}, biz.id);
+    return reply(phone)
+      .text(`✅ *${name}* is set up. Your 7-day free trial has started.`, '', 'Did someone refer you? Type their code (e.g. UNBAR-7K2P) or tap Skip.')
+      .button('ONB_SKIP', 'Skip');
+  }
+
+  // ONBOARDING_REFERRAL — the business exists but resolveActor found it only after createBusiness;
+  // this path is reached only if the owner row is missing, which createBusiness guarantees it isn't.
+  void button;
+  return reply(phone).text('Type your business name to start.');
+}
+
+async function applyReferral(businessId: string, code: string): Promise<boolean> {
+  const referrer = await findBusinessByReferralCode(code);
+  if (!referrer || referrer.id === businessId) return false;
+  await updateBusiness(businessId, { referred_by_business_id: referrer.id });
+  return true;
+}
+
+function welcomeDone(phone: string, name: string, myCode: string, usedCode: string | null): Reply {
+  return reply(phone).text(
+    `🎉 You're in, *${name}*! Free trial: 2 videos · 20 records · 10 alert checks.`,
+    usedCode ? `🎁 Referral ${usedCode} applied.` : '',
+    '',
+    '*Try one now:*',
+    '🎙️ Voice note: _"Sold 2 lace 50k, transfer 30k, balance 20k Mama Tunde"_',
+    '📸 Send 3–5 photos of a product → I make a sales video',
+    '🧾 Send a transfer screenshot → I check if it\'s fake',
+    '',
+    `Your referral code: *${myCode}* — share it, you both get ₦1,000.`,
+  );
+}
+
+// ═════════════════════════ STATEFUL REPLIES ═════════════════════════
+
+const VideoDetailsSchema = z.object({
+  product_name: z.string().optional(),
+  price_ngn: z.number().int().nonnegative().optional(),
+  delivery_info: z.string().optional(),
+  pidgin: z.boolean(),
+});
+
+async function onState(actor: Actor, text: string, session: Session): Promise<Reply | null> {
+  const p = session.pending_payload;
+  switch (session.current_state) {
+    case 'ONBOARDING_REFERRAL': {
+      await setSession(actor.phone, 'IDLE', {});
+      const code = text.match(REF_RE)?.[0]?.toUpperCase();
+      const ok = code ? await applyReferral(actor.business.id, code) : false;
+      if (code && !ok) return reply(actor.phone).text(`Hmm, ${code} isn't valid — no wahala, you're set up anyway.`).text('', 'Send a voice note or product photos to start.');
+      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, ok ? code! : null);
+    }
+    case 'AWAITING_VIDEO_DETAILS': {
+      const d = await generateStructured({
+        schema: VideoDetailsSchema,
+        system: 'Extract product name, selling price in whole Naira ("15k"=15000) and delivery info from a Nigerian seller\'s message. pidgin=true if written in Pidgin.',
+        parts: [{ text }],
+      });
+      if (!d.product_name || !d.price_ngn) {
+        return reply(actor.phone).text('I need the *product name* and *price*. E.g. _"Ankara gown, 15k, delivery Lagos 2k"_');
+      }
+      await setSession(actor.phone, 'IDLE', {});
+      return startVideo(actor, {
+        productName: d.product_name, priceNgn: d.price_ngn, deliveryInfo: d.delivery_info ?? null,
+        rawPaths: (p.image_paths as string[]) ?? [], pidgin: d.pidgin,
+      });
+    }
+    case 'AWAITING_PAYOUT_DETAILS': {
+      await setSession(actor.phone, 'IDLE', {});
+      const amount = await requestPayout(actor.business.id, text.slice(0, 300));
+      if (!amount) return reply(actor.phone).text('Your wallet is below ₦5,000, so I can\'t pay out yet.');
+      if (env.OPS_ALERT_PHONE) {
+        void reply(env.OPS_ALERT_PHONE).text(`💸 Payout request ${ngn(amount)} — ${actor.business.name} (${actor.phone})`, text).send().catch(() => undefined);
+      }
+      return reply(actor.phone).text(`✅ Payout of ${ngn(amount)} requested. It will reach your account within 2 working days.`);
+    }
+    case 'AWAITING_SHEET_LINK': {
+      const id = extractSheetId(text);
+      if (!id) return reply(actor.phone).text('Paste the full Google Sheet link (starts with https://docs.google.com/spreadsheets/…).');
+      await setSession(actor.phone, 'IDLE', {});
+      if (!(await connectSheet(id))) {
+        return reply(actor.phone).text(`I can't write to that sheet yet. Share it with *${SHEETS_SERVICE_EMAIL}* as Editor, then paste the link again.`);
+      }
+      await updateBusiness(actor.business.id, { google_sheet_id: id });
+      return reply(actor.phone).text('✅ Google Sheet connected. Every confirmed record now appears there live.');
+    }
+    default:
+      return null;
+  }
+}
+
+// ═════════════════════════ COMMANDS (deterministic, no LLM cost) ═════════════════════════
+
+async function onCommand(actor: Actor, raw: string, session: Session): Promise<Reply | null> {
+  const t = raw.trim();
+  const upper = t.toUpperCase();
+  const b = actor.business;
+
+  if (upper === 'UNDO') return undoAndRespond(actor, await latestUndoableBatch(b.id, actor.user.id));
+  if (['PLANS', 'UPGRADE', 'PAY', 'SUBSCRIBE'].includes(upper)) return plansMenu(actor);
+  if (upper === 'CHASE') return chaseDebtsReply(actor);
+  if (upper === 'PROMO') return deadStockPromoReply(actor);
+  if (upper === 'STATEMENT') return statementReply(actor);
+  if (['MENU', 'HELP', '?'].includes(upper)) return helpMenu(actor);
+  if (upper === 'I HAVE PAID') return reply(actor.phone).text(`Thanks! Your plan: *${b.subscription_tier}*. If you just paid, it updates within a minute.`);
+
+  if (['REFER', 'WALLET', 'REFERRAL'].includes(upper)) {
+    const link = `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent(`Hi Unbarmore ${b.referral_code}`)}`;
+    const r = reply(actor.phone).text(
+      `🎁 Wallet: *${ngn(b.referral_wallet_ngn)}*`,
+      `Your code: *${b.referral_code}*`,
+      'When someone you refer subscribes, you BOTH get ₦1,000. It pays for your next renewal, or cash out from ₦5,000.',
+      '', 'Forward this to other sellers 👇', link,
+    );
+    if (Number(b.referral_wallet_ngn) >= 5000) r.button('PAYOUT', '💸 Cash out');
+    return r;
+  }
+
+  if (upper === 'THEME') {
+    if (!PLANS[b.subscription_tier].themes) return reply(actor.phone).text('Studio themes are on paid plans.').button('PLANS', '⭐ See plans');
+    return reply(actor.phone).text(`Current video studio: *${b.studio_theme.replace('_', ' ')}*. Pick one:`)
+      .listMenu('Choose theme', [
+        { id: 'THEME:clean_minimalist', title: 'Clean minimalist', description: 'White studio, catalogue look' },
+        { id: 'THEME:luxury_boutique', title: 'Luxury boutique', description: 'Marble, brass, spotlight' },
+        { id: 'THEME:outdoor_lifestyle', title: 'Outdoor lifestyle', description: 'Golden-hour, greenery' },
+      ]);
+  }
+
+  const rc = t.match(/^RC\s*[:#]?\s*(\d{4,8})$/i);
+  if (rc && !actor.isStaff) {
+    await updateBusiness(b.id, { rc_number: rc[1]! });
+    return reply(actor.phone).text(`✅ RC ${rc[1]} will now appear on your receipts.`);
+  }
+
+  const staff = t.match(/^ADD STAFF\s+\+?(\d{10,15})\s+(.{2,60})$/i);
+  if (staff && !actor.isStaff) {
+    if (!PLANS[b.subscription_tier].maxStaff) return reply(actor.phone).text('Staff numbers are on Growth (₦15k/mo): up to 10 staff, each sale audited to you.').button('PLANS', '⭐ See plans');
+    const res = await addStaff(b.id, normalisePhone(staff[1]!), staff[2]!.trim());
+    return reply(actor.phone).text(
+      res === 'ok' ? `✅ ${staff[2]} can now log sales from ${staff[1]}. You'll get an audit of everything they log.`
+        : res === 'limit' ? 'You have reached 10 staff numbers.' : 'That number is already linked to a business.',
+    );
+  }
+
+  if (upper === 'SHEET' && !actor.isStaff) {
+    if (!PLANS[b.subscription_tier].sheetsSync) return reply(actor.phone).text('Live Google Sheets sync is on Growth (₦15k/mo).').button('PLANS', '⭐ See plans');
+    await setSession(actor.phone, 'AWAITING_SHEET_LINK', {});
+    return reply(actor.phone).text('1. Create a Google Sheet', `2. Share it with *${SHEETS_SERVICE_EMAIL ?? '(not configured)'}* as Editor`, '3. Paste the link here');
+  }
+
+  // Smart Order Code typed alone ("UNB-7K2") → show product card.
+  const sku = upper.match(/^UNB-[A-Z0-9]{3}$/)?.[0];
+  if (sku) {
+    const p = await findProductBySku(b.id, sku);
+    if (p) return reply(actor.phone).text(`*${p.name}* (${p.sku_code})`, `Price: ${ngn(p.selling_price_ngn)} · Stock: ${Math.max(0, Number(p.stock_qty))}`, '', `To log a sale: _"sold 1 ${sku} cash"_`);
+  }
+  void session;
+  return null;
+}
+
+const normalisePhone = (p: string) => (p.startsWith('0') ? `234${p.slice(1)}` : p);
+
+function helpMenu(actor: Actor): Reply {
+  const b = actor.business;
+  return reply(actor.phone).text(
+    `*${b.name}* · plan: ${b.subscription_tier}`,
+    '',
+    '🎙️ Voice/text a sale, expense or restock',
+    '📸 3–5 product photos → sales video',
+    '🧾 Transfer screenshot → fake-alert check',
+    '❓ Ask: "who owes me?", "profit this week"',
+    '💬 Paste a customer\'s "too cost" → closing replies',
+    '',
+    'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
+  );
+}
+
+function plansMenu(actor: Actor): Reply {
+  const b = actor.business;
+  return reply(actor.phone)
+    .text(
+      '*Unbarmore plans*',
+      `⭐ Starter — ${ngn(PRICES_NGN.starter_5k.monthly)}/mo or ${ngn(PRICES_NGN.starter_5k.annual)}/yr (2 months free)`,
+      '15 HD videos · 250 records · 150 alert checks · voice notes · Inflation Shield · Sunday CEO report',
+      '',
+      `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
+      '50 videos, no watermark · unlimited records · 10 staff numbers with audit · live Google Sheet',
+      Number(b.referral_wallet_ngn) > 0 ? `\n🎁 Your ${ngn(b.referral_wallet_ngn)} wallet is applied automatically.` : '',
+    )
+    .listMenu('Choose plan', [
+      { id: 'PAY:starter_5k:monthly', title: 'Starter monthly', description: '₦5,000 / month' },
+      { id: 'PAY:starter_5k:annual', title: 'Starter yearly', description: '₦50,000 / year — 2 months free' },
+      { id: 'PAY:growth_15k:monthly', title: 'Growth monthly', description: '₦15,000 / month' },
+      { id: 'PAY:growth_15k:annual', title: 'Growth yearly', description: '₦150,000 / year — 2 months free' },
+    ]);
+}
+
+// ═════════════════════════ BUTTONS ═════════════════════════
+
+async function onButton(actor: Actor, id: string, session: Session): Promise<Reply | null> {
+  const [kind, a, b2] = id.split(':');
+  switch (kind) {
+    case 'TXC': return confirmAndRespond(actor, a!);
+    case 'TXE':
+      await setSession(actor.phone, 'AWAITING_TX_EDIT', { batch_id: a });
+      return reply(actor.phone).text('✏️ Send the correct version (text or voice note) and I\'ll replace it.');
+    case 'TXX': {
+      await undoBatch(a!);
+      return reply(actor.phone).text('❌ Ignored. Nothing was recorded.');
+    }
+    case 'TXU': return undoAndRespond(actor, a!);
+    case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
+    case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
+    case 'PLANS': return plansMenu(actor);
+    case 'PAY': {
+      const tier = a as 'starter_5k' | 'growth_15k';
+      const cycle = b2 as 'monthly' | 'annual';
+      if (!(tier in PRICES_NGN) || !['monthly', 'annual'].includes(cycle)) return null;
+      const link = await createCheckoutLink(actor.business, tier, cycle);
+      return reply(actor.phone).text(
+        `Tap to pay *${ngn(link.amountNgn)}*${link.walletApplied ? ` (${ngn(link.walletApplied)} wallet applied)` : ''} — card, transfer or USSD:`,
+        link.url,
+        '',
+        'Your plan activates the moment payment lands. ✅',
+      );
+    }
+    case 'PAYOUT':
+      await setSession(actor.phone, 'AWAITING_PAYOUT_DETAILS', {});
+      return reply(actor.phone).text('Send your bank name, account number and account name in one message.');
+    case 'THEME': {
+      const theme = a as Actor['business']['studio_theme'];
+      if (!['clean_minimalist', 'luxury_boutique', 'outdoor_lifestyle'].includes(theme)) return null;
+      await updateBusiness(actor.business.id, { studio_theme: theme });
+      return reply(actor.phone).text(`✅ New videos will use *${theme.replace('_', ' ')}*.`);
+    }
+    case 'ONB_SKIP':
+      await setSession(actor.phone, 'IDLE', {});
+      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, null);
+    case 'BTN_CHASE_DEBT': return chaseDebtsReply(actor);
+    case 'BTN_DEADSTOCK_PROMO': return deadStockPromoReply(actor);
+    case 'BTN_EXPORT_PDF': return statementReply(actor);
+    default:
+      void session;
+      return reply(actor.phone).text('That button has expired. Type MENU to see options.');
+  }
+}
+
+// ═════════════════════════ GEMINI ROUTING ═════════════════════════
+
+async function runBrain(
+  actor: Actor,
+  input: { text?: string; audio?: { data: Buffer; mimeType: string }; image?: { data: Buffer; mimeType: string; caption?: string } },
+  session: Session,
+): Promise<Reply> {
+  // Resolve Smart Order Codes to product names so "sold 2 UNB-7K2" logs against the right product.
+  let text = input.text;
+  if (text && /UNB-[A-Z0-9]{3}/i.test(text)) {
+    for (const m of text.match(/UNB-[A-Z0-9]{3}/gi) ?? []) {
+      const p = await findProductBySku(actor.business.id, m);
+      if (p) text = text.replace(m, p.name);
+    }
+  }
+
+  const brain: BrainResult = await routeMessage({
+    ...input, text,
+    business: { name: actor.business.name, recentProducts: await recentProductNames(actor.business.id), todayWat: watDateKey() },
+  });
+  const source = input.audio ? 'whatsapp_voice' : input.image ? 'whatsapp_image'
+    : /\b(credit|cr|acct|amt|ngn)\b.*\d/i.test(text ?? '') ? 'sms_forward' : 'whatsapp_text';
+  void session;
+
+  switch (brain.intent) {
+    case 'LOG_TRANSACTION': {
+      if (!brain.transactions?.length) return reply(actor.phone).text(brain.clarification_needed ?? 'I couldn\'t find an amount. Try: _"sold 2 lace 50k cash"_');
+      return proposeBatch(actor, source, linesToDrafts(brain.transactions), {
+        clarification: brain.clarification_needed,
+        prefix: brain.transcript ? `🎙️ _"${brain.transcript.slice(0, 200)}"_\n` : undefined,
+      });
+    }
+    case 'VERIFY_BANK_ALERT': {
+      if (!input.image) return reply(actor.phone).text('Send the transfer screenshot and I\'ll check it.');
+      if (!(await consumeQuota(actor.business, 'ocr_scans_used_this_month'))) return quotaReply(actor, 'ocr_scans_used_this_month');
+      const alert = brain.bank_alert?.is_bank_alert || brain.bank_alert?.is_supplier_receipt ? brain.bank_alert : await readBankAlert(input.image);
+      if (alert.is_supplier_receipt && alert.supplier_lines?.length) {
+        return proposeBatch(actor, 'whatsapp_image', linesToDrafts(alert.supplier_lines), { prefix: '🧾 Supplier receipt read:' });
+      }
+      if (!alert.is_bank_alert) return reply(actor.phone).text('That doesn\'t look like a transfer receipt. For a product video, send 2–5 photos together.');
+      const path = await uploadFile('raw-images', `${actor.business.id}/alerts/${Date.now()}.jpg`, input.image.data, input.image.mimeType);
+      return bankAlertReply(actor, alert, path);
+    }
+    case 'DRAFT_SALES_REPLY': {
+      const s = brain.sales_reply;
+      if (!s?.scripts?.length) return reply(actor.phone).text('Paste exactly what the customer said and I\'ll write replies that close.');
+      return reply(actor.phone).text('💬 *Copy one and send:*', ...s.scripts.slice(0, 2).flatMap((x, i) => ['', `*Option ${i + 1}*`, x]));
+    }
+    case 'CREATE_VIDEO_SCRIPT': {
+      const v = brain.video_request;
+      if (input.image) {
+        // Single photo with a caption like "make video, Ankara 15k" — treat as a 1-photo batch.
+        return askOrStartVideo(actor, [input.image], v?.product_name, v?.price_ngn, v?.delivery_info);
+      }
+      return reply(actor.phone).text(
+        `📸 Send 2–5 photos of ${v?.product_name ?? 'the product'} together (select them all, then send).`,
+        'Clear daylight photos work best — I\'ll clean up the background.',
+      );
+    }
+    case 'QUERY_BUSINESS':
+      return reply(actor.phone).text(await answerQuery(actor.business, brain.query ?? { kind: 'profit' }));
+    case 'HELP':
+      return reply(actor.phone).text(brain.reply_text ?? '', '', 'Type MENU to see everything I can do.');
+    case 'OFF_TOPIC':
+    default:
+      return reply(actor.phone).text(
+        brain.reply_text ?? 'I only help with your business — sales videos, bookkeeping, receipts and closing customers. 🙏',
+      );
+  }
+}
+
+// ═════════════════════════ IMAGE BATCH (after 4s debounce) ═════════════════════════
+
+async function askOrStartVideo(
+  actor: Actor, images: { data: Buffer; mimeType: string }[], name?: string, price?: number, delivery?: string,
+): Promise<Reply> {
+  const paths: string[] = [];
+  for (const [i, img] of images.entries()) {
+    const ext = img.mimeType.split('/')[1] ?? 'jpg';
+    paths.push(await uploadFile('raw-images', `${actor.business.id}/${Date.now()}-${i}.${ext}`, img.data, img.mimeType));
+  }
+  if (name && price) return startVideo(actor, { productName: name, priceNgn: price, deliveryInfo: delivery ?? null, rawPaths: paths });
+
+  await setSession(actor.phone, 'AWAITING_VIDEO_DETAILS', { image_paths: paths });
+  return reply(actor.phone).text(
+    `📸 Got ${paths.length} photo${paths.length > 1 ? 's' : ''}! For your sales video, reply in one message:`,
+    '1️⃣ Product name',
+    '2️⃣ Price (₦)',
+    '3️⃣ Delivery info (optional)',
+    '',
+    '_e.g. "Ankara gown, 15k, delivery Lagos 2k"_',
+  );
+}
+
+export async function flushImageBatch(phone: string): Promise<void> {
+  const res = await redis.multi().lrange(IMG_KEY(phone), 0, -1).del(IMG_KEY(phone)).exec();
+  const items = ((res?.[0]?.[1] as string[] | undefined) ?? []).map((s) => JSON.parse(s) as { mediaId: string; caption: string; mime: string });
+  if (!items.length) return;
+
+  const actor = await resolveActor(phone);
+  if (!actor) return;
+  const caption = items.map((i) => i.caption).filter(Boolean).join(' ');
+  const images = await Promise.all(items.slice(0, 5).map((i) => downloadMedia(i.mediaId)));
+
+  let r: Reply;
+  if (images.length === 1) {
+    // One image is ambiguous: transfer screenshot, supplier receipt, or a single product photo. Let Gemini decide.
+    r = await runBrain(actor, { image: { ...images[0]!, caption } }, await getSession(phone));
+  } else {
+    // Several images at once = product photos for a video.
+    const brain = caption
+      ? await routeMessage({ text: caption, business: { name: actor.business.name, recentProducts: [], todayWat: watDateKey() } }).catch(() => null)
+      : null;
+    const v = brain?.video_request;
+    r = await askOrStartVideo(actor, images, v?.product_name, v?.price_ngn, v?.delivery_info);
+  }
+  await r.send();
+}
+
+// ═════════════════════════ WORKERS ═════════════════════════
+
+export function startMessageWorkers() {
+  const inbound = new Worker<InboundJob>(QUEUE.inbound, processInbound, { connection: redisConnection, concurrency: 20 });
+  const images = new Worker<{ phone: string }>(QUEUE.imageBatch, async (job) => flushImageBatch(job.data.phone), { connection: redisConnection, concurrency: 10 });
+
+  // Final failure → one apology, so the user is never left on "typing…".
+  inbound.on('failed', (job, err) => {
+    if (!job || err instanceof DelayedError || job.attemptsMade < (job.opts.attempts ?? 1)) return;
+    console.error('[inbound] failed', job.data.msg.id, err);
+    void reply(job.data.msg.from).text('😓 Sorry, I couldn\'t process that. Please try again in a minute.').send().catch(() => undefined);
+  });
+  images.on('failed', (job, err) => {
+    console.error('[images] failed', job?.data.phone, err);
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+      void reply(job.data.phone).text('😓 I couldn\'t read those photos. Please send them again.').send().catch(() => undefined);
+    }
+  });
+  return [inbound, images];
+}
