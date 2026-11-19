@@ -50,3 +50,11 @@ single-use token) → POST redeems it atomically and sets a 30-day httpOnly cook
 **Tested:** migration 002 RPCs on Postgres 16 · production build · live auth behaviour (unauth redirects/401s, forged cookie,
 GET-doesn't-consume) · JWT tamper/alg=none/expiry · Md renderer XSS · advisor snapshot logic (12 tests) · login page ≈173KB gz JS.
 **Not tested here:** the authenticated pages against a live Supabase, real Gemini streaming, installing the PWA on a device.
+
+## Live smoke test (real Supabase)
+```bash
+SUPABASE_URL=https://<ref>.supabase.co SUPABASE_SERVICE_ROLE_KEY=<secret> SUPABASE_ANON_KEY=<publishable> \
+  npx tsx scripts/live-smoke.mts
+```
+Creates throw-away tenants (phones `2349000000xxx`), checks onboarding → pending/confirm/undo metering → receipt via Storage →
+magic tokens → advisor limit → Paystack upgrade + ₦1,000 referral (idempotent) → RLS, then deletes what it created.
