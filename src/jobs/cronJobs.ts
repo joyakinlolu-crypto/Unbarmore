@@ -4,6 +4,7 @@ import { PLANS } from '../config/plans.js';
 import { claimOutbound, consumeQuota, db, isInServiceWindow, ledgerSummary, type Business } from '../db/supabase.js';
 import { cronQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey, watWeekKey } from '../lib/money.js';
+import { createOwnerMagicLink } from '../services/webLink.js';
 import { reply, sendTemplate } from '../services/whatsapp.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
@@ -41,6 +42,7 @@ async function hourly(): Promise<void> {
     }
   }
   await db.rpc('reset_monthly_usage');
+  await db.rpc('purge_old_magic_tokens');
 }
 
 /** 9 PM WAT Cash-in-Hand Reality Check — ONLY inside the free service window ($0 Meta cost). */
@@ -107,6 +109,9 @@ async function sundayCeo(): Promise<void> {
         const r = reply(biz.owner_phone).text(...reportText(biz, rep));
         if (rep.debtors.length) r.button('BTN_CHASE_DEBT', '💬 Chase debts');
         if (rep.deadStock.length) r.button('BTN_DEADSTOCK_PROMO', '🎬 Clear dead stock');
+        // Free-window version carries a 1-tap login link to the full dashboard (templates can't carry a per-user token).
+        const link = await createOwnerMagicLink(biz.id).catch(() => null);
+        if (link) r.text('', `📊 Full charts & AI advisor: ${link}`);
         r.button('BTN_EXPORT_PDF', '📄 Export PDF');
         await r.send();
       } else {

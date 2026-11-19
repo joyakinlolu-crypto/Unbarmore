@@ -3,6 +3,7 @@ import { z } from 'zod';
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().default(3000),
+  WEB_APP_URL: z.string().url().default('https://app.unbarmore.com'),
   PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
   PROCESS_ROLE: z.enum(['all', 'api', 'workers', 'cron']).default('all'),
 

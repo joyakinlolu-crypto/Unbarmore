@@ -1,0 +1,10 @@
+node_modules
+.next
+.env
+.env.local
+public/sw.js
+public/sw.js.map
+public/swe-worker*
+next-env.d.ts
+tsconfig.tsbuildinfo
+assets

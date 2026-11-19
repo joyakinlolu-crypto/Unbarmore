@@ -20,6 +20,7 @@ import {
 } from '../flows/ledger.js';
 import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/reports.js';
 import { startVideo } from '../flows/video.js';
+import { createOwnerMagicLink } from '../services/webLink.js';
 
 export interface InboundJob { msg: WaInboundMessage; profileName: string | null }
 
@@ -243,6 +244,15 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
 
   if (upper === 'UNDO') return undoAndRespond(actor, await latestUndoableBatch(b.id, actor.user.id));
   if (['PLANS', 'UPGRADE', 'PAY', 'SUBSCRIBE'].includes(upper)) return plansMenu(actor);
+  if (['DASHBOARD', 'WEB', 'CHAT', 'LOGIN'].includes(upper)) {
+    if (actor.isStaff) return reply(actor.phone).text('The dashboard shows the whole business\'s money, so it is for the owner only.');
+    const link = await createOwnerMagicLink(b.id);
+    if (!link) return reply(actor.phone).text('You asked for several links just now. Please wait a few minutes and try again.');
+    return reply(actor.phone).text(
+      '📊 *Your dashboard, advisor chat and ledger:*', link, '',
+      'One tap, no password. Link works once and expires in 15 minutes. Add it to your Home Screen to open it like an app.',
+    );
+  }
   if (upper === 'CHASE') return chaseDebtsReply(actor);
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
@@ -316,6 +326,7 @@ function helpMenu(actor: Actor): Reply {
     '❓ Ask: "who owes me?", "profit this week"',
     '💬 Paste a customer\'s "too cost" → closing replies',
     '',
+    '📊 DASHBOARD — charts + unlimited AI advisor on the web',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
   );
 }

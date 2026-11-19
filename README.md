@@ -26,3 +26,24 @@ Schema + RPCs on Postgres 16 (confirm/undo, quota, referral idempotency, downgra
 4s sliding image debounce on real Redis · webhook signature/200-fast · PDF output · `npm test`.
 ## Not tested here (needs your keys)
 Live Gemini/TTS output quality, Meta delivery & template approval, Paystack live charges, Supabase Storage.
+
+---
+
+## Web companion — `web/` (app.unbarmore.com)
+
+Next.js 16 PWA: WhatsApp magic-link login, live dashboard, unlimited AI advisor, ledger + PDFs, settings.
+```bash
+# 1. apply supabase/migrations/002_web_magic_links.sql
+cd web && cp .env.example .env.local   # fill in
+npm run dev                            # production build: npm run build && npm start  (uses --webpack for Serwist)
+```
+Deploy anywhere that runs Node (Vercel works; `assets/fonts` ships via `outputFileTracingIncludes`).
+Set the **same** `SUPABASE_*` as the backend, a fresh `JWT_SECRET`, and `APP_URL` / `WEB_APP_URL` (backend) to the public origin.
+
+**How login works:** user texts `DASHBOARD` (or the Sunday report carries a link) → backend stores `SHA-256(token)`,
+sends `…/auth/verify?token=…` → GET shows a "Open my dashboard" button (so WhatsApp link-preview bots can't burn the
+single-use token) → POST redeems it atomically and sets a 30-day httpOnly cookie. Owner-only; staff never see the dashboard.
+
+**Tested:** migration 002 RPCs on Postgres 16 · production build · live auth behaviour (unauth redirects/401s, forged cookie,
+GET-doesn't-consume) · JWT tamper/alg=none/expiry · Md renderer XSS · advisor snapshot logic (12 tests) · login page ≈173KB gz JS.
+**Not tested here:** the authenticated pages against a live Supabase, real Gemini streaming, installing the PWA on a device.
