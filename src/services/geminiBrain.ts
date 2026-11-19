@@ -113,29 +113,42 @@ export async function generateStructured<T>(opts: {
   const models = [env.GEMINI_TEXT_MODEL, env.GEMINI_TEXT_FALLBACK_MODEL].filter((m, i, a) => m && a.indexOf(m) === i);
   let lastErr: unknown;
   for (const model of models) {
-    try {
-      const res = await genai.models.generateContent({
-        model,
-        contents: [{ role: 'user', parts: opts.parts }],
-        config: {
-          systemInstruction: opts.system,
-          responseMimeType: 'application/json',
-          responseJsonSchema: jsonSchema,
-          temperature: opts.temperature ?? 0.2,
-          // Ledger parsing is extraction, not reasoning — keep latency low on 2.5 Flash.
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      });
-      const text = res.text;
-      if (!text) throw new Error('empty model response');
-      const parsed = opts.schema.safeParse(JSON.parse(text));
-      if (!parsed.success) throw new Error(`schema validation failed: ${parsed.error.message}`);
-      return parsed.data;
-    } catch (err) {
-      lastErr = err;
+    // Two tries per model: Gemini returns 503 "high demand" in spikes. Keep total worst-case latency bounded
+    // (≈15s timeout × 2 tries × 2 models) — a WhatsApp user is waiting on the other end.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await genai.models.generateContent({
+          model,
+          contents: [{ role: 'user', parts: opts.parts }],
+          config: {
+            systemInstruction: opts.system,
+            responseMimeType: 'application/json',
+            responseJsonSchema: jsonSchema,
+            temperature: opts.temperature ?? 0.2,
+            // No thinkingConfig on purpose: thinkingBudget:0 is rejected (400) by some newer models, and the
+            // configured model is meant to be swappable via env without code changes.
+            httpOptions: { timeout: 15_000 },
+          },
+        });
+        const text = res.text;
+        if (!text) throw new Error('empty model response');
+        const parsed = opts.schema.safeParse(JSON.parse(text));
+        if (!parsed.success) throw new Error(`schema validation failed: ${parsed.error.message}`);
+        return parsed.data;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransient(err)) break; // 400/404/validation → retrying the same model won't help, go to fallback
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      }
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/** 429 / 5xx / deadline / "high demand" — worth one more try. */
+export function isTransient(err: unknown): boolean {
+  const m = String((err as { message?: string })?.message ?? err);
+  return /\b(429|500|502|503|504)\b|high demand|DEADLINE|UNAVAILABLE|RESOURCE_EXHAUSTED|timed? ?out|fetch failed/i.test(m);
 }
 
 // ═════════════════════════ ROUTER ═════════════════════════
@@ -184,11 +197,11 @@ export async function routeMessage(input: BrainInput): Promise<BrainResult> {
 }
 
 /** Image-only path when user is mid-flow and we already know it's a bank alert / receipt. */
-export async function readBankAlert(image: { data: Buffer; mimeType: string }): Promise<BankAlert> {
+export async function readBankAlert(image: { data: Buffer; mimeType: string }, todayWat: string = new Date(Date.now() + 3600_000).toISOString().slice(0, 10)): Promise<BankAlert> {
   return generateStructured({
     schema: BankAlertSchema,
     system:
-      'You are a forensic reader of Nigerian bank transfer screenshots (Opay, Moniepoint, Palmpay, Kuda, GTBank, Access, Zenith, UBA, First Bank, etc.) and supplier receipts. Extract fields exactly as printed. Scrutinise the amount and name regions for edit artifacts. Be conservative: list an anomaly only if you can point to it.',
+      `You are a forensic reader of Nigerian bank transfer screenshots (Opay, Moniepoint, Palmpay, Kuda, GTBank, Access, Zenith, UBA, First Bank, etc.) and supplier receipts. Extract fields exactly as printed. Scrutinise the amount and name regions for edit artifacts. Be conservative: list an anomaly only if you can point to it in the image itself. Today's date in Lagos is ${todayWat}: a date on or before today is NORMAL and must never be listed as an anomaly. Do not flag the session ID merely for its length or digits.`,
     parts: [{ inlineData: { mimeType: image.mimeType, data: image.data.toString('base64') } }, { text: 'Read this.' }],
     temperature: 0,
   });

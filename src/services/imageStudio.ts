@@ -1,5 +1,8 @@
 import { env } from '../config/env.js';
-import { genai } from './geminiBrain.js';
+import { GoogleGenAI } from '@google/genai';
+
+// Image generation (responseModalities/imageConfig) is only on the v1beta API surface; the SDK default is v1.
+const genai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY, httpOptions: { apiVersion: 'v1beta' } });
 
 export type StudioTheme = 'clean_minimalist' | 'luxury_boutique' | 'outdoor_lifestyle';
 

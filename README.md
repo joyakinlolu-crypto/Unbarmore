@@ -58,3 +58,12 @@ SUPABASE_URL=https://<ref>.supabase.co SUPABASE_SERVICE_ROLE_KEY=<secret> SUPABA
 ```
 Creates throw-away tenants (phones `2349000000xxx`), checks onboarding → pending/confirm/undo metering → receipt via Storage →
 magic tokens → advisor limit → Paystack upgrade + ₦1,000 referral (idempotent) → RLS, then deletes what it created.
+
+## Gemini notes (verified live)
+- `gemini-2.5-flash` / `-flash-lite` return **404 for new API keys** ("no longer available to new users"). Default is now
+  `gemini-3.1-flash-lite` (fallback `gemini-3.5-flash-lite`); both are env-configurable. Don't pass `thinkingConfig` — some models 400 on it.
+- Newer flash models return **503 "high demand"** in spikes (free-tier especially). The router retries once per model, then falls back; BullMQ retries the job.
+- **Image enhancement needs a billed key** (free keys get 429 on image models). On failure `imageStudio` falls back to the original photo, so videos still render.
+- Image + TTS calls must use the `v1beta` API surface (the SDK default is `v1`).
+- `npx tsx scripts/live-gemini.mts` (set `GEMINI_API_KEY`, `NODE_USE_ENV_PROXY=1` in the sandbox) exercises the router on Pidgin/Yoruba/SMS,
+  objection handling, off-topic refusal, video script limits, bank-alert OCR and a synthetic voice note.

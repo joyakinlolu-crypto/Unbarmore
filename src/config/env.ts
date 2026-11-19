@@ -23,7 +23,7 @@ const schema = z.object({
   WHATSAPP_TEMPLATE_LANG: z.string().default('en'),
 
   GEMINI_API_KEY: z.string().min(1),
-  GEMINI_TEXT_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_TEXT_MODEL: z.string().default('gemini-3.1-flash-lite'),
   GEMINI_TEXT_FALLBACK_MODEL: z.string().default('gemini-3.5-flash-lite'),
   GEMINI_IMAGE_MODEL: z.string().default('gemini-2.5-flash-image'),
 

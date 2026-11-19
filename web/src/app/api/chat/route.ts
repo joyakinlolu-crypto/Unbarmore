@@ -53,11 +53,22 @@ export async function POST(req: NextRequest) {
       let open = true;
       const push = (t: string) => { if (!open) return; try { controller.enqueue(encoder.encode(t)); } catch { open = false; } };
       try {
-        const stream = await ai.models.generateContentStream({
-          model: process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash',
-          contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
-          config: { systemInstruction, temperature: 0.5, maxOutputTokens: 1200, thinkingConfig: { thinkingBudget: 0 } },
-        });
+        const models = [process.env.GEMINI_TEXT_MODEL || 'gemini-3.1-flash-lite', process.env.GEMINI_TEXT_FALLBACK_MODEL || 'gemini-3.5-flash-lite']
+          .filter((m, i, a) => a.indexOf(m) === i);
+        let stream: Awaited<ReturnType<typeof ai.models.generateContentStream>> | null = null;
+        let lastErr: unknown;
+        // Try the primary model, then the fallback, BEFORE the first byte is streamed (503 "high demand" happens at stream start).
+        for (const model of models) {
+          try {
+            stream = await ai.models.generateContentStream({
+              model,
+              contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
+              config: { systemInstruction, temperature: 0.5, maxOutputTokens: 1200 },
+            });
+            break;
+          } catch (e) { lastErr = e; }
+        }
+        if (!stream) throw lastErr;
         for await (const chunk of stream) {
           const t = chunk.text;
           if (t) { full += t; push(t); }
