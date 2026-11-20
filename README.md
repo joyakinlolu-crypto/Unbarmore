@@ -76,3 +76,12 @@ set -a; . web/.env.local; set +a; NODE_USE_ENV_PROXY=1 npx tsx scripts/live-web-
 Seeds a business (sales ₦200k, fuel ₦60k, rent ₦20k, a ₦95k debtor), mints a magic link with the backend's own function, then checks:
 login (GET doesn't consume, POST redeems once, cookie flags, replay/forged rejected) → dashboard figures → ledger/debtors/settings/PDF →
 3 advisor chats in a real browser (reply #3 opens with the exact ₦ fact, CTA + locked input, server 402 on #4, state survives reload). Cleans up after itself.
+
+## Live WhatsApp outbound test
+```bash
+set -a; . ./.env; set +a; NODE_USE_ENV_PROXY=1 npx tsx scripts/live-whatsapp-send.mts <recipient digits>
+```
+Sends ONE interactive message (text + PDF receipt header + 2 buttons) through the app's own `Reply` builder. Verified delivered on a real phone.
+Rules for Meta test numbers: the recipient must be on the allowed list, and free-form messages only work within 24h of the recipient messaging the number
+(first contact must be the `hello_world` template). Error `131005` = the token has no WhatsApp account assigned (generate it from App → WhatsApp → API Setup,
+or use a System User token with the WhatsApp account asset).
