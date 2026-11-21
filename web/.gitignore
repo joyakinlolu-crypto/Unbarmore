@@ -7,4 +7,3 @@ public/sw.js.map
 public/swe-worker*
 next-env.d.ts
 tsconfig.tsbuildinfo
-assets
