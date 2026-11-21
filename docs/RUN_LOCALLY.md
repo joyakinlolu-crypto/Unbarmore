@@ -50,7 +50,7 @@ You should see the server listening on port 3000 and no red errors. Quick check 
 
 ## 5. Open the tunnel (second terminal window)
 ```bash
-ngrok http 3000
+ngrok http 127.0.0.1:3000   # 127.0.0.1 (not "localhost") avoids a Windows IPv6 mismatch: ngrok error "dial tcp [::1]:8080 … connection refused" means wrong port or the bot is not running
 ```
 Copy the `https://….ngrok-free.app` address it prints. Leave this window open.
 Check: open `https://<that address>/healthz` in a browser — you should see `{"ok":true}`.
