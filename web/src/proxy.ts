@@ -6,7 +6,9 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const ok = !!(await verifySession(req.cookies.get(SESSION_COOKIE)?.value));
 
-  if (pathname === '/login') return ok ? NextResponse.redirect(new URL('/dashboard', req.url)) : NextResponse.next();
+  // NOTE: /login is deliberately NOT redirected here. A cookie that is cryptographically valid can still be refused by the
+  // database check (deactivated user, deleted business); bouncing /login → /dashboard → /login made an infinite loop.
+  // The login page itself does the DB-verified "already logged in → /dashboard" redirect.
   if (ok) return NextResponse.next();
   if (pathname.startsWith('/api/')) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const url = new URL('/login', req.url);
@@ -14,5 +16,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/login', '/dashboard/:path*', '/advisor/:path*', '/ledger/:path*', '/settings/:path*', '/api/chat', '/api/export', '/api/receipt/:path*'],
+  matcher: ['/dashboard/:path*', '/advisor/:path*', '/ledger/:path*', '/settings/:path*', '/api/chat', '/api/export', '/api/receipt/:path*'],
 };

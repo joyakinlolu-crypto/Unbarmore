@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 
-const GRAPH = `https://graph.facebook.com/${env.WHATSAPP_GRAPH_VERSION}`;
+const GRAPH = env.WHATSAPP_GRAPH_BASE ?? `https://graph.facebook.com/${env.WHATSAPP_GRAPH_VERSION}`;
 
 // ───────────── Webhook signature ─────────────
 

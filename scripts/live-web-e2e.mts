@@ -94,6 +94,14 @@ try {
   const pdf = await fetch(`${BASE}/api/export`, { headers: { cookie } });
   const pdfBuf = Buffer.from(await pdf.arrayBuffer());
   ok('/api/export returns a real PDF statement', pdf.status === 200 && pdfBuf.subarray(0, 4).toString() === '%PDF' && pdfBuf.length > 3000, `${pdfBuf.length} bytes`);
+  // a deactivated user holding a still-valid cookie must NOT cause a redirect loop
+  await db.from('business_users').update({ is_active: false }).eq('business_id', bid).eq('role', 'owner');
+  const deact = await fetch(`${BASE}/dashboard`, { headers: { cookie }, redirect: 'manual' });
+  const loginPage = await fetch(`${BASE}/login`, { headers: { cookie }, redirect: 'manual' });
+  ok('deactivated user + valid cookie: /dashboard → /login, and /login renders (no redirect loop)', deact.status === 307 && (deact.headers.get('location') ?? '').endsWith('/login') && loginPage.status === 200, `dashboard ${deact.status}, login ${loginPage.status}`);
+  await db.from('business_users').update({ is_active: true }).eq('business_id', bid).eq('role', 'owner');
+  const loggedInLogin = await fetch(`${BASE}/login`, { headers: { cookie }, redirect: 'manual' });
+  ok('logged-in user opening /login is sent to /dashboard', loggedInLogin.status === 307 && (loggedInLogin.headers.get('location') ?? '').endsWith('/dashboard'));
   const forged = await fetch(`${BASE}/dashboard`, { redirect: 'manual', headers: { cookie: 'unbarmore_session=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.bad' } });
   ok('forged session cookie is rejected', forged.status === 307);
 

@@ -56,12 +56,9 @@ export async function sendReplySafely(r: Reply, to: string): Promise<boolean> {
 
 // ═════════════════════════ ENTRY ═════════════════════════
 
-async function processInbound(job: Job<InboundJob>, token?: string): Promise<void> {
+async function processInbound(job: Job<InboundJob & { claimed?: boolean }>, token?: string): Promise<void> {
   const { msg, profileName } = job.data;
   const phone = msg.from;
-
-  // Idempotency for Meta re-deliveries — only on the first attempt so our own retries still run.
-  if (job.attemptsMade === 0 && !(await claimMessageId(msg.id))) return;
 
   // Per-user serialisation: a "Confirm" tap must never overtake the message that created the batch.
   const locked = await redis.set(LOCK_KEY(phone), job.id ?? '1', 'PX', 60_000, 'NX');
@@ -70,6 +67,13 @@ async function processInbound(job: Job<InboundJob>, token?: string): Promise<voi
     throw new DelayedError();
   }
   try {
+    // Idempotency for Meta re-deliveries. Claimed AFTER taking the lock and remembered on the job: a job that waited for the
+    // lock is re-run with attemptsMade still 0, and re-claiming then would wrongly drop it as a "duplicate"
+    // (this silently lost the 2nd/3rd photo when several arrived at once, and any message sent while another was processing).
+    if (!job.data.claimed) {
+      if (!(await claimMessageId(msg.id))) return;
+      await job.updateData({ ...job.data, claimed: true });
+    }
     void markReadWithTyping(msg.id);
     const r = await handle(msg, profileName);
     if (r && !r.isEmpty) await sendReplySafely(r, phone);

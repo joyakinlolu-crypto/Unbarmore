@@ -19,6 +19,8 @@ const schema = z.object({
   WHATSAPP_APP_SECRET: z.string().min(1),
   WHATSAPP_VERIFY_TOKEN: z.string().min(8),
   WHATSAPP_GRAPH_VERSION: z.string().default('v23.0'),
+  /** TESTING ONLY: point the WhatsApp client at a fake Meta server (scripts/live-whatsapp-flow.mts). Leave unset in production. */
+  WHATSAPP_GRAPH_BASE: z.string().url().optional(),
   WHATSAPP_CEO_TEMPLATE: z.string().default('unbarmore_weekly_ceo_report'),
   WHATSAPP_TEMPLATE_LANG: z.string().default('en'),
 
@@ -27,7 +29,9 @@ const schema = z.object({
   GEMINI_TEXT_FALLBACK_MODEL: z.string().default('gemini-3.5-flash-lite'),
   GEMINI_IMAGE_MODEL: z.string().default('gemini-2.5-flash-image'),
 
-  TTS_PROVIDER: z.enum(['google', 'azure']).default('google'),
+  TTS_PROVIDER: z.enum(['gemini', 'google', 'azure']).default('gemini'),
+  GEMINI_TTS_MODEL: z.string().default('gemini-3.8-flash-lite-tts'),
+  GEMINI_TTS_VOICE: z.string().default('Kore'),
   GOOGLE_TTS_VOICE: z.string().default('en-NG-Chirp3-HD-Achird'),
   AZURE_SPEECH_KEY: z.string().optional(),
   AZURE_SPEECH_REGION: z.string().default('westeurope'),

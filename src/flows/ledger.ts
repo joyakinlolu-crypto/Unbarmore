@@ -235,7 +235,11 @@ export async function discardPending(actor: Actor, batchId: string): Promise<Rep
 // ───────────── Bank alert verification ─────────────
 
 export async function bankAlertReply(actor: Actor, a: BankAlert, imagePath: string | null): Promise<Reply> {
-  const reasons = [...a.anomalies];
+  // HARD reasons are checkable facts (we looked it up / measured it) → red warning.
+  // SOFT reasons are only the AI's visual impression ("layout looks odd"); an AI can be wrong about a genuine receipt from a
+  // bank it has seen less of, and accusing an honest customer is costly → yellow "double-check", never "fake".
+  const reasons: string[] = [];
+  const soft = a.anomalies.filter(Boolean);
   if (a.session_id) {
     const reuse = await findBankSessionReuse(a.session_id);
     if (reuse) {
@@ -252,23 +256,27 @@ export async function bankAlertReply(actor: Actor, a: BankAlert, imagePath: stri
     if (t > Date.now() + 10 * 60_000) reasons.push('Transfer time is in the future.');
     else if (Date.now() - t > 72 * 3600_000) reasons.push('Transfer is more than 3 days old.');
   }
-  const flagged = reasons.length > 0;
+  const flagged = reasons.length > 0;            // hard evidence
+  const uneasy = !flagged && soft.length > 0;     // only the AI's impression
 
   const draft: TxnDraft = {
     tx_type: 'sale', description: `Transfer from ${a.sender_name ?? 'customer'}`, category: 'Sales',
     quantity: 1, unit_price_ngn: a.amount_ngn ?? 0, total_amount_ngn: a.amount_ngn ?? 0, amount_paid_ngn: a.amount_ngn ?? 0,
     payment_method: 'transfer', item_name: null, customer_name: a.sender_name ?? null,
     bank_session_id: a.session_id ?? null, sender_bank_name: a.bank_name ?? null,
-    ocr_fraud_flag: flagged, ocr_fraud_reason: flagged ? reasons.join(' | ') : null,
+    ocr_fraud_flag: flagged, ocr_fraud_reason: flagged || uneasy ? [...reasons, ...soft.map((x) => `(AI impression) ${x}`)].join(' | ') : null,
   };
   const { batchId } = await createPendingBatch(actor, 'whatsapp_image', [draft]);
   void imagePath;
 
   const r = reply(actor.phone).text(
-    flagged ? '🔴 *Be careful — check your bank app before releasing goods*' : '🟢 *Screenshot looks consistent*',
+    flagged ? '🔴 *Be careful — check your bank app before releasing goods*'
+      : uneasy ? '🟡 *Looks mostly fine, but please double-check in your bank app*'
+      : '🟢 *Screenshot looks consistent*',
     `${ngn(a.amount_ngn)} from ${a.sender_name ?? 'unknown'} (${a.bank_name ?? 'bank ?'})`,
     a.session_id ? `Session: …${a.session_id.slice(-8)}` : null,
     ...(flagged ? reasons.map((x) => `• ${x}`) : []),
+    ...(uneasy ? ['_My eye noticed something unusual, but I can\'t be sure:_', ...soft.slice(0, 2).map((x) => `• ${x}`)] : []),
     '',
     flagged ? '' : '_A screenshot is not money. Confirm the credit in your bank app._',
   );

@@ -1,9 +1,12 @@
+import { redirect } from 'next/navigation';
 import LoginForm from '@/components/LoginForm';
+import { getSession } from '@/lib/auth';
 import { botNumber } from '@/lib/whatsapp';
 
 export const metadata = { title: 'Log in' };
 
 export default async function Login({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  if (await getSession()) redirect('/dashboard'); // truly logged in (DB-verified), not just a well-formed cookie
   const { error } = await searchParams;
   return (
     <main className="grid min-h-dvh place-items-center bg-royal p-4">

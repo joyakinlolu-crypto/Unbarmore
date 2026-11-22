@@ -217,11 +217,12 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
       businessName: business.name, productName: product.name, priceNgn: price, deliveryInfo: row.delivery_info as string | null,
       orderCode: product.sku_code, clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin',
     });
-    let voicePath: string | null = path.join(workDir, 'vo.mp3');
+    let voicePath: string | null = null;
     try {
-      const mp3 = await synthesizeVoiceover(script.voiceover, { pidgin: script.pidgin });
-      await fs.writeFile(voicePath, mp3);
-      const audioPath = await uploadFile('videos', `${businessId}/${videoId}.mp3`, mp3, 'audio/mpeg');
+      const vo = await synthesizeVoiceover(script.voiceover, { pidgin: script.pidgin });
+      voicePath = path.join(workDir, `vo.${vo.ext}`);
+      await fs.writeFile(voicePath, vo.data);
+      const audioPath = await uploadFile('videos', `${businessId}/${videoId}.${vo.ext}`, vo.data, vo.mime);
       await db.from('video_jobs').update({ audio_url: audioPath }).eq('id', videoId);
     } catch (e) {
       console.warn('[video] TTS failed, rendering music-only', e);

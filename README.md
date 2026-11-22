@@ -85,3 +85,16 @@ Sends ONE interactive message (text + PDF receipt header + 2 buttons) through th
 Rules for Meta test numbers: the recipient must be on the allowed list, and free-form messages only work within 24h of the recipient messaging the number
 (first contact must be the `hello_world` template). Error `131005` = the token has no WhatsApp account assigned (generate it from App → WhatsApp → API Setup,
 or use a System User token with the WhatsApp account asset).
+
+## One-command automatic tests (no phone, no Meta dashboard, no tunnel)
+```bash
+set -a; . ./.env; set +a; export NODE_USE_ENV_PROXY=1      # NODE_USE_ENV_PROXY only inside the Claude sandbox
+npx tsx scripts/live-whatsapp-flow.mts   # bot: onboarding, ledger, undo, debts, plans, voice note, 3-photo debounce, video render
+npx tsx scripts/live-smoke.mts           # database + billing + referral rules
+npx tsx scripts/live-gemini.mts          # languages, scripts, OCR, voice
+# web app (needs: cd web && env -u NODE_ENV npx next build --webpack && env -u NODE_ENV npx next start -p 3333)
+set -a; . web/.env.local; set +a; npx tsx scripts/live-web-e2e.mts
+```
+`live-whatsapp-flow` runs a *pretend Meta* server (`WHATSAPP_GRAPH_BASE`, testing only), so every reply the bot would send is captured and checked.
+Gotchas learned: don't export the bot's `NODE_ENV=development` into the web build (Next prerender crash); kill stale `next-server` processes (port 3333).
+Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cloud account needed.

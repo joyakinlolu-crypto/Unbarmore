@@ -42,9 +42,12 @@ export async function endSession() { (await cookies()).delete(SESSION_COOKIE); }
 export const getSession = cache(async (): Promise<Session | null> => {
   const claims = await verifySession((await cookies()).get(SESSION_COOKIE)?.value);
   if (!claims) return null;
-  const { data } = await db.from('business_users')
-    .select('id, role, is_active, businesses(*)')
+  const lookup = () => db.from('business_users').select('id, role, is_active, businesses(*)')
     .eq('id', claims.sub).eq('business_id', claims.business_id).maybeSingle();
+  let { data, error } = await lookup();
+  if (error) ({ data, error } = await lookup()); // one retry for a network blip
+  // A failed lookup is NOT "logged out": throw so the user sees an error page and can retry, instead of being bounced to /login.
+  if (error) throw new Error(`session lookup failed: ${error.message}`);
   const row = data as unknown as { is_active: boolean; role: 'owner' | 'staff'; businesses: Business } | null;
   if (!row || !row.is_active || row.role !== 'owner') return null;
   return { ...claims, business: row.businesses };
