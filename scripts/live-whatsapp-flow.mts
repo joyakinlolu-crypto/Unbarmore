@@ -19,7 +19,7 @@ import { GoogleGenAI } from '@google/genai';
 const need = (k: string) => { const v = process.env[k]; if (!v) throw new Error(`missing env ${k} (run: set -a; . ./.env; set +a)`); return v; };
 const SB = need('SUPABASE_URL'), SBKEY = need('SUPABASE_SERVICE_ROLE_KEY'), SECRET = need('WHATSAPP_APP_SECRET'), VERIFY = need('WHATSAPP_VERIFY_TOKEN');
 const PHONE_ID = need('WHATSAPP_PHONE_NUMBER_ID'), GKEY = need('GEMINI_API_KEY');
-const FAKE_PORT = 4010, BOT_PORT = 3050, PH = '2349000000401', BOT = `http://127.0.0.1:${BOT_PORT}`;
+const FAKE_PORT = 4010, BOT_PORT = 3050, PH = '2349000000401', PH2 = '2349000000402', BOT = `http://127.0.0.1:${BOT_PORT}`;
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: unknown, extra = '') => { cond ? pass++ : fail++; console.log(`${cond ? '✅' : '❌'} ${name}${extra ? ' — ' + String(extra).replace(/\s+/g, ' ').slice(0, 170) : ''}`); };
@@ -72,23 +72,25 @@ const view = (s: Sent) => {
   if (p.type === 'document') return { kind: 'document', text: (p.document.caption ?? '') as string, buttons: [], header: { type: 'document', link: p.document.link as string }, rows: [] };
   return { kind: p.type as string, text: JSON.stringify(p), buttons: [], header: null, rows: [] };
 };
+/** the lone "⏳ Processing your entry..." note is not a reply; with INTERIM_NOTICE_MS=1000 in this test it can appear on any slow step */
+const real = (vs: ReturnType<typeof view>[]) => vs.filter((v) => !/Processing your entry\.\.\./.test(v.text));
 const APOLOGY = /couldn.t process that|couldn.t read those photos/i;
 
 // ───────────────────────── the real bot ─────────────────────────
 const logFile = path.join(os.tmpdir(), `bot-${Date.now()}.log`);
 const bot: ChildProcess = spawn('npx', ['tsx', 'src/server.ts'], {
-  env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1' },
+  env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1', ADMIN_PHONE: PH, SUPPORT_WHATSAPP_URL: 'https://wa.me/2348100000002', INTERIM_NOTICE_MS: '1000' },
   stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')],
 });
 
 let n = 0;
 const sign = (body: string) => 'sha256=' + crypto.createHmac('sha256', SECRET).update(body).digest('hex');
-const envelope = (msg: Record<string, unknown>) => JSON.stringify({
+const envelope = (msg: Record<string, unknown>, from = PH) => JSON.stringify({
   object: 'whatsapp_business_account',
-  entry: [{ id: '1', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { phone_number_id: PHONE_ID }, contacts: [{ profile: { name: 'Ada Tester' }, wa_id: PH }], messages: [msg] } }] }],
+  entry: [{ id: '1', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { phone_number_id: PHONE_ID }, contacts: [{ profile: { name: 'Ada Tester' }, wa_id: from }], messages: [msg] } }] }],
 });
-async function webhook(msg: Record<string, unknown>, id?: string) {
-  const body = envelope({ from: PH, id: id ?? `wamid.FLOW${Date.now()}${++n}`, timestamp: String(Math.floor(Date.now() / 1000)), ...msg });
+async function webhook(msg: Record<string, unknown>, id?: string, from = PH) {
+  const body = envelope({ from, id: id ?? `wamid.FLOW${Date.now()}${++n}`, timestamp: String(Math.floor(Date.now() / 1000)), ...msg }, from);
   const r = await fetch(`${BOT}/webhooks/whatsapp`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) }, body });
   return r.status;
 }
@@ -114,14 +116,16 @@ async function ask(label: string, send: () => Promise<number>, until: (v: Return
 
 // ───────────────────────── cleanup ─────────────────────────
 async function cleanup() {
-  const bs = await rows(`businesses?owner_phone=eq.${PH}&select=id`);
-  for (const b of bs) for (const bucket of ['raw-images', 'cleaned-images', 'videos', 'pdf-receipts']) {
-    const l = await fetch(`${SB}/storage/v1/object/list/${bucket}`, { method: 'POST', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefix: b.id, limit: 100 }) });
-    const files = (await l.json().catch(() => [])) as { name: string }[];
-    if (Array.isArray(files) && files.length) await fetch(`${SB}/storage/v1/object/${bucket}`, { method: 'DELETE', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: files.map((f) => `${b.id}/${f.name}`) }) });
+  for (const phone of [PH, PH2]) {
+    const bs = await rows(`businesses?owner_phone=eq.${phone}&select=id`);
+    for (const b of bs) for (const bucket of ['raw-images', 'cleaned-images', 'videos', 'pdf-receipts']) {
+      const l = await fetch(`${SB}/storage/v1/object/list/${bucket}`, { method: 'POST', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefix: b.id, limit: 100 }) });
+      const files = (await l.json().catch(() => [])) as { name: string }[];
+      if (Array.isArray(files) && files.length) await fetch(`${SB}/storage/v1/object/${bucket}`, { method: 'DELETE', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: files.map((f) => `${b.id}/${f.name}`) }) });
+    }
+    await rest(`businesses?owner_phone=eq.${phone}`, { method: 'DELETE' });
+    await rest(`whatsapp_sessions?phone_number=eq.${phone}`, { method: 'DELETE' });
   }
-  await rest(`businesses?owner_phone=eq.${PH}`, { method: 'DELETE' });
-  await rest(`whatsapp_sessions?phone_number=eq.${PH}`, { method: 'DELETE' });
   await rest(`processed_messages?wa_message_id=like.wamid.FLOW*`, { method: 'DELETE' });
 }
 
@@ -162,13 +166,26 @@ try {
   ok('summary shows the debt: Mama Tunde owes ₦20k, and the ₦5k fuel', /Mama Tunde/.test(r.reply?.text ?? '') && /20k|20,000/.test(r.reply?.text ?? '') && /5,000/.test(r.reply?.text ?? ''));
   ok('quota not charged at proposal time', Number((await rows(`businesses?id=eq.${biz!.id}&select=tx_logged_this_month`))[0]?.tx_logged_this_month) === 0);
 
-  r = await ask('confirm', () => button(confirmId), (v) => v.header?.type === 'document');
-  ok('Confirm → ONE message with PDF receipt + today\'s profit + Undo button', !!r.reply && /Saved/.test(r.reply.text) && /Profit/.test(r.reply.text) && r.reply.buttons.some((b) => b.id.startsWith('TXU:')), r.reply?.text.replace(/\n/g, ' | '));
-  ok('that was exactly one outbound message for the action', r.all.length === 1, `${r.all.length} message(s)`);
-  if (r.reply?.header?.link) {
-    const pdf = Buffer.from(await (await fetch(r.reply.header.link)).arrayBuffer());
+  r = await ask('confirm', () => button(confirmId), (v) => /Saved/.test(v.text) && v.buttons.some((b) => b.id.startsWith('RCPT:')));
+  ok('Confirm → ONE light message: saved + today\'s profit + [🧾 Customer Receipt] + Undo (no PDF forced on every sale)', !!r.reply && /Profit/.test(r.reply.text) && r.reply.header === null && r.reply.buttons.some((b) => b.id.startsWith('TXU:')) && r.reply.buttons.some((b) => /Customer Receipt/.test(b.title)), r.reply?.text.replace(/\n/g, ' | '));
+  ok('that was exactly one outbound message for the action', real(r.all).length === 1, `${real(r.all).length} message(s)`);
+  ok('PDF quota untouched until a receipt is actually requested', Number((await rows(`businesses?id=eq.${biz!.id}&select=pdf_receipts_used_this_month`))[0]?.pdf_receipts_used_this_month) === 0);
+  const rcptId = r.reply?.buttons.find((b) => b.id.startsWith('RCPT:'))?.id ?? '';
+  const rc = await ask('receipt-button', () => button(rcptId), (v) => v.kind === 'document');
+  const cap = rc.reply?.text ?? '';
+  ok('tap 🧾 Customer Receipt → ONE document message with a forward-ready caption', !!rc.reply && real(rc.all).length === 1, cap.replace(/\n/g, ' | '));
+  ok('receipt shows business, customer, item, paid ₦30,000, remaining debt ₦20,000 and a date', /Ada Fabrics/.test(cap) && /Mama Tunde/.test(cap) && /Lace/.test(cap) && /Paid: ₦30,000/.test(cap) && /Balance remaining: ₦20,000/.test(cap) && /20\d\d/.test(cap));
+  if (rc.reply?.header?.link) {
+    const pdf = Buffer.from(await (await fetch(rc.reply.header.link)).arrayBuffer());
     ok('the receipt link downloads a real PDF', pdf.subarray(0, 4).toString() === '%PDF' && pdf.length > 3000, `${pdf.length} bytes`);
   }
+  const rc2 = await ask('RECEIPT', () => text('RECEIPT'), (v) => v.kind === 'document');
+  ok('typing RECEIPT resends the last receipt', !!rc2.reply && /Balance remaining: ₦20,000/.test(rc2.reply.text));
+  const rc3 = await ask('RECEIPT name', () => text('RECEIPT Mama'), (v) => v.kind === 'document');
+  ok('RECEIPT Mama → receipt for that customer', !!rc3.reply && /Mama Tunde/.test(rc3.reply.text));
+  const rc4 = await ask('RECEIPT nobody', () => text('RECEIPT Zzyzx'), (v) => /can.t find/i.test(v.text), 30_000);
+  ok('RECEIPT for an unknown customer → polite "can\'t find"', !!rc4.reply);
+  ok('receipt regenerated 3× but counted ONCE against the PDF quota', Number((await rows(`businesses?id=eq.${biz!.id}&select=pdf_receipts_used_this_month`))[0]?.pdf_receipts_used_this_month) === 1);
   ok('quota: 2 lines in 1 message = 1 unit', Number((await rows(`businesses?id=eq.${biz!.id}&select=tx_logged_this_month`))[0]?.tx_logged_this_month) === 1);
   const dbl = await ask('double-confirm', () => button(confirmId), (v) => /Already saved/.test(v.text), 40_000);
   ok('tapping Confirm twice does not duplicate or re-charge', !!dbl.reply && Number((await rows(`businesses?id=eq.${biz!.id}&select=tx_logged_this_month`))[0]?.tx_logged_this_month) === 1);
@@ -183,6 +200,15 @@ try {
   // ───── 8–11. menus, links, guardrails, sales help ─────
   r = await ask('plans', () => text('PLANS'), (v) => v.rows.length > 0);
   ok('PLANS → menu pitches "speak a full day\'s sales & expenses in one voice note"', !!r.reply && /one voice note/i.test(r.reply.text) && r.reply.rows.includes('PAY:starter_5k:monthly'));
+
+  r = await ask('starter', () => text('STARTER'), (v) => /switched on|opens very soon/i.test(v.text));
+  ok('payments not live (placeholder Paystack key) → friendly "opens soon" + support link, no crash', !!r.reply && /wa\.me\/2348100000002/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+
+  r = await ask('support', () => text('SUPPORT'), (v) => /Quick help/i.test(v.text));
+  ok('SUPPORT → the 5 core commands + the support link', !!r.reply && ['VOICE NOTE', 'WHO DEY OWE ME', 'CLOSE', 'RECEIPT', 'LOGIN'].every((c) => r.reply!.text.includes(c)) && /wa\.me\/2348100000002/.test(r.reply.text));
+
+  r = await ask('who-dey-owe-me', () => text('WHO DEY OWE ME'), (v) => /Nobody owes|owing you/i.test(v.text), 30_000);
+  ok('"WHO DEY OWE ME" works as an instant command (no AI needed)', !!r.reply, r.reply?.text.replace(/\n/g, ' | '));
 
   r = await ask('dashboard', () => text('DASHBOARD'), (v) => /auth\/verify\?token=/.test(v.text));
   ok('DASHBOARD → a one-time login link (64-hex token)', !!r.reply && /token=[a-f0-9]{64}/.test(r.reply.text));
@@ -211,6 +237,30 @@ try {
     if (vid) { await ask('voice-confirm', () => button(vid), (v) => /Saved/.test(v.text)); }
     ok('confirmed voice message counts as 1 logged message', Number((await rows(`businesses?id=eq.${biz!.id}&select=tx_logged_this_month`))[0]?.tx_logged_this_month) === 1);
   } catch (e) { ok('voice-note test', false, String(e)); }
+
+  // ───── 12b. CLOSE: end-of-day reconcile ─────
+  r = await ask('close', () => text('close shop'), (v) => /Expected cash in drawer/.test(v.text));
+  const ct = r.reply?.text ?? '';
+  ok('"close shop" → expected cash, bank transfers, total expenses and new credit', !!r.reply && /Expected bank transfers/.test(ct) && /Total expenses: ₦3,000/.test(ct) && /New credit given today: ₦0/.test(ct), ct.replace(/\n/g, ' | ').slice(0, 220));
+  ok('CLOSE counts only today\'s confirmed sale (₦45,000); the undone one is excluded', /Sales today ₦45,000/.test(ct));
+
+  // ───── 12c. low-stock warning on a sale ─────
+  r = await ask('restock', () => text('bought 6 gele at 4k each cash'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const rid = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id;
+  if (rid) await ask('restock-confirm', () => button(rid), (v) => /Saved/.test(v.text));
+  r = await ask('sale-gele', () => text('sold 5 gele for 50k cash'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const sid = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id;
+  r = sid ? await ask('sale-gele-confirm', () => button(sid), (v) => /Saved/.test(v.text)) : r;
+  ok('selling down to 1 left → the confirmation carries a concise low-stock warning', /gele/i.test(r.reply?.text ?? '') && /only 1 left/.test(r.reply?.text ?? '') && /restock/i.test(r.reply?.text ?? ''), r.reply?.text.replace(/\n/g, ' | '));
+
+  // ───── 12d. ADMIN: only the admin number ─────
+  r = await ask('admin', () => text('ADMIN'), (v) => /live stats/i.test(v.text));
+  ok('ADMIN from ADMIN_PHONE → live platform stats from the database', !!r.reply && /Businesses/.test(r.reply.text) && /Est\. MRR/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+  const b3 = sent.length;
+  await webhook({ type: 'text', text: { body: 'ADMIN' } }, undefined, PH2);
+  const t3 = Date.now(); while (Date.now() - t3 < 30_000 && sent.length === b3) await sleep(300);
+  const other = sent.slice(b3).map(view);
+  ok('ADMIN from any other number gets NOTHING (treated as an ordinary first message)', other.length >= 1 && !other.some((v) => /live stats|Est\. MRR|Businesses:/.test(v.text)), other[0]?.text.slice(0, 80));
 
   // ───── 13. duplicate delivery from Meta (retries) must not double-reply ─────
   const dupId = `wamid.FLOWDUP${Date.now()}`;
@@ -268,6 +318,10 @@ try {
   console.log(`   ℹ️  photo clean-up by the image model: ${vj?.cleaned_image_urls?.length ? 'used' : 'skipped (image quota) — original photos were used, as designed'}`);
   ok('video quota charged once (trial: 1 of 2)', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === 1);
 
+  // ───── the "Processing your entry..." note (INTERIM_NOTICE_MS=1000 in this test) ─────
+  const notices = sent.map(view).filter((v) => /Processing your entry\.\.\./.test(v.text));
+  ok('slow AI → "⏳ Processing your entry..." was sent (and only as a lone short note)', notices.length >= 1 && notices.every((v) => v.kind === 'text' && v.buttons.length === 0), `${notices.length} notice(s)`);
+
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));
   ok('no secrets appear in any outbound message', !/sb_secret_|EAAf|AQ\.Ab8|ea5d2437/.test(everything));
@@ -276,7 +330,7 @@ try {
 } finally {
   bot.kill('SIGTERM'); fake.close(); redis.disconnect();
   await cleanup().catch((e) => console.error('cleanup error', e));
-  const left = await rows(`businesses?owner_phone=eq.${PH}&select=id`).catch(() => [{}]);
+  const left = (await rows(`businesses?owner_phone=in.(${PH},${PH2})&select=id`).catch(() => [{}])) as unknown[];
   console.log(`\n🧹 cleanup: ${left.length === 0 ? 'all test data and files removed' : 'TEST DATA REMAINS'}`);
   if (fail) { const errs = fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => /"level":(50|60)|\[send\]|\[inbound\]|\[video\]|Error/.test(l)).slice(-8); if (errs.length) console.log('\nlast bot errors:\n' + errs.map((l) => '  ' + l.slice(0, 230)).join('\n')); }
   console.log(`\n${fail === 0 ? '🎉' : '⚠️'} ${pass} passed, ${fail} failed`);

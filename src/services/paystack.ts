@@ -7,20 +7,30 @@ const API = 'https://api.paystack.co';
 type PaidTier = 'starter_5k' | 'growth_15k';
 type Interval = 'monthly' | 'annual';
 
+/** A value counts as "real" only if it is set and not an obvious placeholder (so a half-filled .env can't pretend payments work). */
+const isReal = (v?: string) => !!v && v.trim().length > 8 && !/placeholder|replace_me|paste_|unused|changeme|xxxx/i.test(v);
+
+/** True only when a real Paystack secret key is configured. Until then the bot runs normally and payments say "opening soon". */
+export const paymentsLive = (): boolean => isReal(env.PAYSTACK_SECRET_KEY);
+
+export class PaymentsNotLiveError extends Error {
+  constructor() { super('payments are not live yet'); this.name = 'PaymentsNotLiveError'; }
+}
+
 export function verifyPaystackSignature(rawBody: Buffer, header: string | undefined): boolean {
-  if (!header) return false;
-  const expected = crypto.createHmac('sha512', env.PAYSTACK_SECRET_KEY).update(rawBody).digest('hex');
+  if (!header || !paymentsLive()) return false;
+  const expected = crypto.createHmac('sha512', env.PAYSTACK_SECRET_KEY!).update(rawBody).digest('hex');
   if (header.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(header, 'hex'), Buffer.from(expected, 'hex'));
 }
 
 const PLAN_CODES: Record<PaidTier, Record<Interval, string>> = {
-  starter_5k: { monthly: env.PAYSTACK_PLAN_STARTER_MONTHLY, annual: env.PAYSTACK_PLAN_STARTER_ANNUAL },
-  growth_15k: { monthly: env.PAYSTACK_PLAN_GROWTH_MONTHLY, annual: env.PAYSTACK_PLAN_GROWTH_ANNUAL },
+  starter_5k: { monthly: env.PAYSTACK_PLAN_STARTER_MONTHLY ?? '', annual: env.PAYSTACK_PLAN_STARTER_ANNUAL ?? '' },
+  growth_15k: { monthly: env.PAYSTACK_PLAN_GROWTH_MONTHLY ?? '', annual: env.PAYSTACK_PLAN_GROWTH_ANNUAL ?? '' },
 };
 
 function planFromCode(code: string | undefined): { tier: PaidTier; interval: Interval } | null {
-  if (!code) return null;
+  if (!code || !isReal(code)) return null;
   for (const tier of Object.keys(PLAN_CODES) as PaidTier[]) {
     for (const interval of ['monthly', 'annual'] as Interval[]) {
       if (PLAN_CODES[tier][interval] === code) return { tier, interval };
@@ -30,6 +40,7 @@ function planFromCode(code: string | undefined): { tier: PaidTier; interval: Int
 }
 
 async function paystack<T>(path: string, body: unknown): Promise<T> {
+  if (!paymentsLive()) throw new PaymentsNotLiveError();
   const res = await fetch(`${API}${path}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
@@ -49,6 +60,7 @@ const syntheticEmail = (b: Business) => `${b.owner_phone}@wa.unbarmore.com`;
  * - Wallet credit → single charge for (price − wallet); renewals stay manual until wallet is used up.
  */
 export async function createCheckoutLink(b: Business, tier: PaidTier, interval: Interval): Promise<{ url: string; amountNgn: number; walletApplied: number }> {
+  if (!paymentsLive() || !isReal(PLAN_CODES[tier][interval])) throw new PaymentsNotLiveError();
   const price = PRICES_NGN[tier][interval];
   const walletApplied = Math.min(Number(b.referral_wallet_ngn), price - 100); // Paystack minimum ₦100
   const amountNgn = price - Math.max(0, walletApplied);

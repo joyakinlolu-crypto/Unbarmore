@@ -10,4 +10,5 @@ export async function sendWhatsAppText(to: string, body: string): Promise<boolea
 }
 
 export const botNumber = () => process.env.WHATSAPP_DISPLAY_NUMBER ?? '';
-export const appUrl = () => (process.env.APP_URL ?? 'https://app.unbarmore.com').replace(/\/$/, '');
+export const appUrl = () =>
+  (process.env.APP_URL ?? (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'https://app.unbarmore.com')).replace(/\/$/, '');

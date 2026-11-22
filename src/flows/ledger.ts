@@ -1,14 +1,13 @@
 import { PLANS } from '../config/plans.js';
 import {
   confirmBatch, consumeQuota, createPendingBatch, db, findBankSessionReuse, getBatchRows, getProduct, isInServiceWindow,
-  refundQuota, setReceiptUrl, signedUrl, undoBatch, updateBusiness, uploadFile,
+  refundQuota, undoBatch, updateBusiness,
   type Actor, type PayMethod, type SourceChannel, type TxnDraft, type TxnRow,
 } from '../db/supabase.js';
 import type { BankAlert, TxnLine } from '../services/geminiBrain.js';
 import { appendLedgerRows } from '../services/googleSheets.js';
-import { receiptPdf } from '../services/pdfGenerator.js';
 import { reply, type Reply } from '../services/whatsapp.js';
-import { ngn, ngnShort, watDateKey } from '../lib/money.js';
+import { ngn, ngnShort } from '../lib/money.js';
 import { todayLine } from './insights.js';
 
 export const BTN = {
@@ -16,6 +15,7 @@ export const BTN = {
   edit: (batch: string) => `TXE:${batch}`,
   discard: (batch: string) => `TXX:${batch}`,
   undo: (batch: string) => `TXU:${batch}`,
+  receipt: (batch: string) => `RCPT:${batch}`,
   marginAccept: (productId: string, price: number) => `MSA:${productId}:${price}`,
   marginKeep: (productId: string) => `MSK:${productId}`,
 };
@@ -87,6 +87,34 @@ export async function proposeBatch(
   return r;
 }
 
+// ───────────── Low-stock warning ─────────────
+
+export const LOW_STOCK_AT = 2;
+export interface StockSnap { name: string; stock: number; cost: number }
+
+async function stockSnapshot(rows: TxnRow[]): Promise<Map<string, StockSnap>> {
+  const ids = [...new Set(rows.filter((t) => t.tx_type === 'sale' && t.product_id).map((t) => t.product_id!))];
+  const out = new Map<string, StockSnap>();
+  for (const id of ids) { const p = await getProduct(id); out.set(id, { name: p.name, stock: Number(p.stock_qty), cost: Number(p.cost_price_ngn) }); }
+  return out;
+}
+
+/**
+ * Warn when a sale leaves a TRACKED product at LOW_STOCK_AT units or fewer. "Tracked" = the owner has restocked it at some point
+ * (it had stock before this sale, or a recorded cost). A product that was never restocked just sits at 0/negative and would
+ * otherwise trigger a warning on every sale, which would train the owner to ignore the warnings that matter.
+ */
+export function lowStockLines(before: Map<string, StockSnap>, after: Map<string, StockSnap>): string[] {
+  const lines: string[] = [];
+  for (const [id, b] of before) {
+    const a = after.get(id);
+    if (!a || !(b.stock > 0 || b.cost > 0 || a.cost > 0) || a.stock > LOW_STOCK_AT) continue;
+    lines.push(a.stock <= 0 ? `⚠️ *${a.name}* is sold out — restock soon.` : `⚠️ *${a.name}*: only ${a.stock} left — restock soon.`);
+  }
+  if (!lines.length) return [];
+  return [...lines.slice(0, 3), ...(lines.length > 3 ? [`…and ${lines.length - 3} more running low.`] : []), 'Restock: say "bought 10 lace 15k each".'];
+}
+
 /** Step 2: confirm → apply → ONE reply carrying receipt PDF + today's profit (+ margin shield if a restock got dearer). */
 export async function confirmAndRespond(actor: Actor, batchId: string): Promise<Reply> {
   const before = await getBatchRows(batchId);
@@ -97,6 +125,7 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
 
   // Inflation Shield: capture old prices BEFORE confirm_batch overwrites cost_price_ngn.
   const shield = await marginShieldCandidate(actor, before);
+  const stockBefore = await stockSnapshot(before); // for the low-stock warning
 
   // Charge exactly 1 unit per confirmed message (atomic cap check in SQL). Over the cap → discard the pending entry.
   const metered = countsTowardTxQuota(before[0]!.source_channel);
@@ -120,26 +149,12 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
 
   r.text(`✅ Saved ${rows.length > 1 ? `${rows.length} entries` : ''}`.trim(), await todayLine(actor.business.id));
 
-  // Receipt for sales — attached to this same message.
-  const sales = rows.filter((t) => t.tx_type === 'sale');
-  if (sales.length && (await consumeQuota(actor.business, 'pdf_receipts_used_this_month'))) {
-    const receiptNo = `${watDateKey().replace(/-/g, '').slice(2)}-${batchId.slice(0, 4).toUpperCase()}`;
-    const pdf = await receiptPdf({
-      businessName: actor.business.name,
-      rcNumber: actor.business.rc_number,
-      receiptNumber: receiptNo,
-      dateWat: new Date(Date.now() + 3600_000).toISOString().replace('T', ' ').slice(0, 16) + ' WAT',
-      customerName: sales.find((s) => s.customers?.name)?.customers?.name ?? null,
-      lines: sales.map((s) => ({ description: s.description, quantity: Number(s.quantity), unitPrice: s.unit_price_ngn ? Number(s.unit_price_ngn) : null, amount: Number(s.total_amount_ngn) })),
-      amountPaid: sales.reduce((a, s) => a + Number(s.amount_paid_ngn), 0),
-      paymentMethod: sales[0]!.payment_method ?? 'cash',
-      staffName: actor.isStaff ? actor.user.full_name : null,
-    });
-    const path = await uploadFile('pdf-receipts', `${actor.business.id}/${receiptNo}.pdf`, pdf, 'application/pdf');
-    await setReceiptUrl(batchId, path);
-    r.document(await signedUrl('pdf-receipts', path), `Receipt-${receiptNo}.pdf`);
-    r.text('🧾 Receipt attached — forward it to your customer.');
-  }
+  // Low stock after this sale?
+  const lows = lowStockLines(stockBefore, await stockSnapshot(rows));
+  if (lows.length) r.text('', ...lows);
+
+  // Customer receipt is on demand (button / RECEIPT): saves the free-plan PDF quota and keeps this reply fast.
+  const hasReceipt = rows.some((t) => t.tx_type === 'sale' || t.tx_type === 'debt_repayment');
 
   if (shield) {
     r.text(
@@ -150,7 +165,9 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
     );
     r.button(BTN.marginAccept(shield.productId, shield.suggested), `Update to ${ngnShort(shield.suggested)}`);
     r.button(BTN.marginKeep(shield.productId), 'Keep old price');
+    if (hasReceipt) r.button(BTN.receipt(batchId), '🧾 Customer Receipt');
   } else {
+    if (hasReceipt) r.button(BTN.receipt(batchId), '🧾 Customer Receipt');
     r.button(BTN.undo(batchId), '↩️ Undo');
   }
 
@@ -278,7 +295,7 @@ export async function bankAlertReply(actor: Actor, a: BankAlert, imagePath: stri
     ...(flagged ? reasons.map((x) => `• ${x}`) : []),
     ...(uneasy ? ['_My eye noticed something unusual, but I can\'t be sure:_', ...soft.slice(0, 2).map((x) => `• ${x}`)] : []),
     '',
-    flagged ? '' : '_A screenshot is not money. Confirm the credit in your bank app._',
+    flagged ? '' : uneasy ? '_A screenshot is not money. Confirm the credit in your bank app._' : '✅ Receipt details look valid (Session ID logged). Still confirm credit in your bank app before releasing high-value goods.',
   );
   r.button(BTN.confirm(batchId), flagged ? 'Received anyway' : '✅ Log as sale');
   r.button(BTN.discard(batchId), '❌ Ignore');

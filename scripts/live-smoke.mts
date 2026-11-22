@@ -14,6 +14,7 @@ for (const [k, v] of Object.entries({
 const S = await import('../src/db/supabase.ts');
 const L = await import('../src/flows/ledger.ts');
 const P = await import('../src/services/paystack.ts');
+const R = await import('../src/flows/receipts.ts');
 const { db } = S;
 
 const PH = { owner: '2349000000001', ref: '2349000000002', referee: '2349000000003' };
@@ -69,9 +70,14 @@ try {
   const lace = prods?.find((p) => p.name === 'Swiss Lace'), gele = prods?.find((p) => p.name === 'Gele');
   ok('products auto-created lazily with UNB-XXX codes', /^UNB-[A-Z0-9]{3}$/.test(lace?.sku_code ?? '') && /^UNB-/.test(gele?.sku_code ?? ''));
   ok('stock moved (lace −2, gele +10) and restock cost recorded', num(lace?.stock_qty) === -2 && num(gele?.stock_qty) === 10 && num(gele?.cost_price_ngn) === 4000);
-  const payload = confirmed.toPayload() as { interactive?: { header?: { type: string; document?: { link: string } } } };
-  ok('ONE reply carries the PDF receipt (Storage upload + signed URL work)', payload.interactive?.header?.type === 'document' && !!payload.interactive?.header?.document?.link?.startsWith('https://'));
-  ok('receipt counted once', num(after.pdf_receipts_used_this_month) === 1);
+  const cp = confirmed.toPayload() as { interactive?: { header?: unknown; action?: { buttons: { reply: { id: string } }[] } } };
+  ok('confirmation is light: a 🧾 Customer Receipt button, no PDF forced on every sale', !cp.interactive?.header && !!cp.interactive?.action?.buttons.some((x) => x.reply.id === `RCPT:${batchId}`));
+  ok('PDF quota untouched until a receipt is asked for', num(after.pdf_receipts_used_this_month) === 0);
+  const rcpt = (await R.customerReceiptReply(actor, batchId)).toPayload() as { type: string; document?: { link: string; caption: string } };
+  ok('tapping the receipt button → one document message (Storage upload + signed URL work)', rcpt.type === 'document' && !!rcpt.document?.link.startsWith('https://'));
+  ok('receipt caption carries the remaining debt (Mama Tunde ₦20,000)', /Mama Tunde/.test(rcpt.document?.caption ?? '') && /Balance remaining: ₦20,000/.test(rcpt.document?.caption ?? ''));
+  await R.customerReceiptReply(actor, batchId);
+  ok('receipt counted once, even if re-sent', num((await S.getBusiness(biz.id)).pdf_receipts_used_this_month) === 1);
   const again = await L.confirmAndRespond(actor, batchId);
   ok('double-confirm is idempotent and not charged twice', num((await S.getBusiness(biz.id)).tx_logged_this_month) === 1 && JSON.stringify(again.toPayload()).includes('Already saved'));
 

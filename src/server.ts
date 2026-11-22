@@ -4,7 +4,7 @@ import { env } from './config/env.js';
 import { db, isInServiceWindow, touchInbound } from './db/supabase.js';
 import { inboundQueue } from './lib/queues.js';
 import { extractMessages, verifyMetaSignature, reply, type WaWebhookBody } from './services/whatsapp.js';
-import { handlePaystackEvent, verifyPaystackSignature } from './services/paystack.js';
+import { handlePaystackEvent, paymentsLive, verifyPaystackSignature } from './services/paystack.js';
 import { ngn } from './lib/money.js';
 import { startMessageWorkers } from './workers/messageWorker.js';
 import { startVideoWorker } from './workers/videoWorker.js';
@@ -63,6 +63,7 @@ app.post('/webhooks/whatsapp', { config: { rateLimit: { max: 600, timeWindow: '1
 // ═════════════════════════ PAYSTACK ═════════════════════════
 
 app.post('/webhooks/paystack', async (req, res) => {
+  if (!paymentsLive()) return res.code(503).send('payments not configured'); // Paystack will simply retry once the key is set
   if (!verifyPaystackSignature(rawOf(req), req.headers['x-paystack-signature'] as string | undefined)) return res.code(401).send('bad signature');
   try {
     const outcome = await handlePaystackEvent(req.body as Parameters<typeof handlePaystackEvent>[0]);
@@ -96,6 +97,8 @@ app.post('/webhooks/paystack', async (req, res) => {
 });
 
 // ═════════════════════════ BOOT ═════════════════════════
+
+if (!paymentsLive()) app.log.warn('PAYSTACK_SECRET_KEY not set (or placeholder): the bot runs, but paid plans show "payments opening soon".');
 
 const role = env.PROCESS_ROLE;
 const closers: (() => Promise<unknown>)[] = [];

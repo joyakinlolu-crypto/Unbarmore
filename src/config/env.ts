@@ -16,6 +16,12 @@ const schema = z.object({
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   WHATSAPP_DISPLAY_NUMBER: z.string().regex(/^\d{10,15}$/).describe('Bot number in E.164 without +, for wa.me links'),
   OPS_ALERT_PHONE: z.string().optional(),
+  /** Owner of the platform: the only number that can use the ADMIN command (digits, e.g. 2348012345678). */
+  ADMIN_PHONE: z.string().regex(/^\d{10,15}$/).optional(),
+  /** Shown by SUPPORT and when payments aren't live yet, e.g. https://wa.me/2348012345678 */
+  SUPPORT_WHATSAPP_URL: z.string().url().optional(),
+  /** If the AI takes longer than this to answer, the user gets a short "Processing your entry…" note. */
+  INTERIM_NOTICE_MS: z.coerce.number().int().min(1000).default(12000),
   WHATSAPP_APP_SECRET: z.string().min(1),
   WHATSAPP_VERIFY_TOKEN: z.string().min(8),
   WHATSAPP_GRAPH_VERSION: z.string().default('v23.0'),
@@ -37,11 +43,11 @@ const schema = z.object({
   AZURE_SPEECH_REGION: z.string().default('westeurope'),
   AZURE_TTS_VOICE: z.string().default('en-NG-AbeoNeural'),
 
-  PAYSTACK_SECRET_KEY: z.string().min(1),
-  PAYSTACK_PLAN_STARTER_MONTHLY: z.string().min(1),
-  PAYSTACK_PLAN_STARTER_ANNUAL: z.string().min(1),
-  PAYSTACK_PLAN_GROWTH_MONTHLY: z.string().min(1),
-  PAYSTACK_PLAN_GROWTH_ANNUAL: z.string().min(1),
+  PAYSTACK_SECRET_KEY: z.string().optional(),
+  PAYSTACK_PLAN_STARTER_MONTHLY: z.string().optional(),
+  PAYSTACK_PLAN_STARTER_ANNUAL: z.string().optional(),
+  PAYSTACK_PLAN_GROWTH_MONTHLY: z.string().optional(),
+  PAYSTACK_PLAN_GROWTH_ANNUAL: z.string().optional(),
 
   GOOGLE_SHEETS_SA_JSON_B64: z.string().optional(),
 
@@ -53,6 +59,9 @@ export type Env = z.infer<typeof schema>;
 
 function load(): Env {
   const parsed = schema.safeParse(process.env);
+  if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
+    throw new Error('Invalid environment configuration:\n  - REDIS_URL: required in production (on Railway: add a Redis service and reference its REDIS_URL)');
+  }
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
     // Fail fast: a half-configured bot that silently drops payments is worse than one that won't boot.

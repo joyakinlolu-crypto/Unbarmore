@@ -54,6 +54,10 @@ export interface ReceiptInput {
   amountPaid: number;
   paymentMethod: string;
   staffName?: string | null;
+  /** Customer's total outstanding debt AFTER this entry. Omit → falls back to this sale's unpaid part. */
+  remainingBalance?: number;
+  /** Date the remaining balance is as at, e.g. "20 Nov 2026". */
+  balanceAsAt?: string;
 }
 
 export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
@@ -64,7 +68,7 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
 
     doc.font('reg').fontSize(9).fillColor(BRAND.muted);
     doc.text(`Date: ${r.dateWat}`);
-    if (r.customerName) doc.text(`Billed to: ${r.customerName}`);
+    doc.text(`Customer: ${r.customerName ?? 'Walk-in customer'}`);
     if (r.staffName) doc.text(`Served by: ${r.staffName}`);
     doc.moveDown();
 
@@ -95,18 +99,28 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
       doc.x = x;
     };
     kv('Total', ngn(total), true);
-    kv(`Paid (${r.paymentMethod})`, ngn(r.amountPaid));
-    if (balance > 0) kv('Balance due', ngn(balance), true, BRAND.red);
+    kv(`Amount paid (${r.paymentMethod})`, ngn(r.amountPaid));
+    const remaining = r.remainingBalance ?? balance;
 
-    // PAID stamp — only when fully settled.
-    if (balance === 0) {
+    // Remaining debt balance — always shown, so the customer sees exactly where they stand.
+    doc.moveDown(0.6);
+    const boxY = doc.y;
+    doc.roundedRect(x + w * 0.35, boxY, w * 0.65, 34, 6).fillColor(remaining > 0 ? '#FEF3F2' : '#ECFDF3').fill();
+    doc.font('bold').fontSize(9).fillColor(remaining > 0 ? BRAND.red : BRAND.stamp)
+      .text(`REMAINING BALANCE${r.balanceAsAt ? ` (as at ${r.balanceAsAt})` : ''}`, x + w * 0.35 + 8, boxY + 6, { width: w * 0.65 - 16 });
+    doc.font('bold').fontSize(13).text(remaining > 0 ? ngn(remaining) : 'NIL — fully paid', x + w * 0.35 + 8, boxY + 17, { width: w * 0.65 - 16 });
+    doc.y = boxY + 44; doc.x = x;
+
+    // PAID stamp — only when the customer owes nothing.
+    if (remaining === 0) {
       const cx = x + w * 0.2;
-      const cy = doc.y + 30;
+      const cy = boxY + 20;
       doc.save().rotate(-14, { origin: [cx, cy] });
       doc.roundedRect(cx - 55, cy - 20, 110, 40, 6).lineWidth(2.5).strokeColor(BRAND.stamp).opacity(0.85).stroke();
       doc.font('bold').fontSize(24).fillColor(BRAND.stamp).text('PAID', cx - 55, cy - 13, { width: 110, align: 'center' });
       doc.restore().opacity(1);
     }
+    doc.font('reg').fontSize(9).fillColor(BRAND.muted).text('Thank you for your patronage.', x, doc.y + 8, { width: w, align: 'center' });
     footer(doc);
   }, 'A5');
 }

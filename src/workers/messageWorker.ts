@@ -12,7 +12,7 @@ import { imageBatchQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey } from '../lib/money.js';
 import { generateStructured, readBankAlert, routeMessage, type BrainResult } from '../services/geminiBrain.js';
 import { connectSheet, extractSheetId, SHEETS_SERVICE_EMAIL } from '../services/googleSheets.js';
-import { createCheckoutLink, requestPayout } from '../services/paystack.js';
+import { createCheckoutLink, paymentsLive, PaymentsNotLiveError, requestPayout } from '../services/paystack.js';
 import { downloadMedia, markReadWithTyping, reply, type Reply, type WaInboundMessage } from '../services/whatsapp.js';
 import { answerQuery } from '../flows/insights.js';
 import {
@@ -21,6 +21,10 @@ import {
 import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/reports.js';
 import { startVideo } from '../flows/video.js';
 import { createOwnerMagicLink } from '../services/webLink.js';
+import { withInterimNotice } from '../lib/interim.js';
+import { closeShopReply } from '../flows/close.js';
+import { customerReceiptReply, latestReceiptBatch } from '../flows/receipts.js';
+import { adminStatsReply, isAdmin, supportReply } from '../flows/platform.js';
 
 export interface InboundJob { msg: WaInboundMessage; profileName: string | null }
 
@@ -75,7 +79,8 @@ async function processInbound(job: Job<InboundJob & { claimed?: boolean }>, toke
       await job.updateData({ ...job.data, claimed: true });
     }
     void markReadWithTyping(msg.id);
-    const r = await handle(msg, profileName);
+    // If the AI is slow (>12s), tell the user we are on it — once. Silence on WhatsApp reads as "broken".
+    const r = await withInterimNotice(() => handle(msg, profileName), env.INTERIM_NOTICE_MS, async () => { await reply(phone).text('⏳ Processing your entry...').send(); });
     if (r && !r.isEmpty) await sendReplySafely(r, phone);
   } finally {
     await redis.del(LOCK_KEY(phone));
@@ -84,6 +89,7 @@ async function processInbound(job: Job<InboundJob & { claimed?: boolean }>, toke
 
 async function handle(msg: WaInboundMessage, profileName: string | null): Promise<Reply | null> {
   const phone = msg.from;
+  if (msg.type === 'text' && /^admin$/i.test(msg.text?.body?.trim() ?? '') && isAdmin(phone)) return adminStatsReply(phone);
   const actor = await resolveActor(phone);
   let session = await getSession(phone);
 
@@ -285,12 +291,19 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     );
   }
   if (upper === 'STARTER') {
-    const link = await createCheckoutLink(b, 'starter_5k', 'monthly');
+    if (!paymentsLive()) return paymentsSoonReply(actor.phone);
+    const link = await createCheckoutLink(b, 'starter_5k', 'monthly').catch((e) => { if (e instanceof PaymentsNotLiveError) return null; throw e; });
+    if (!link) return paymentsSoonReply(actor.phone);
     return reply(actor.phone).text(
       `Tap to pay *${ngn(link.amountNgn)}*${link.walletApplied ? ` (${ngn(link.walletApplied)} wallet applied)` : ''} for Starter — card, transfer or USSD:`,
       link.url, '', 'Unlimited CFO chat + 15 videos + voice notes + fake-alert checks. Activates the moment payment lands. ✅',
     );
   }
+  if (upper === 'SUPPORT') return supportReply(actor.phone);
+  if (/^close( the)?( shop)?$|^closing$/i.test(t)) return closeShopReply(actor);
+  if (/^who dey owe me\??$/i.test(t)) return reply(actor.phone).text(await answerQuery(b, { kind: 'debtors' }));
+  const rcpt = t.match(/^receipt(?:\s+(.{2,40}))?$/i);
+  if (rcpt) { const who = rcpt[1]?.trim(); return customerReceiptReply(actor, await latestReceiptBatch(actor, who), who); }
   if (upper === 'CHASE') return chaseDebtsReply(actor);
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
@@ -353,6 +366,14 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
 
 const normalisePhone = (p: string) => (p.startsWith('0') ? `234${p.slice(1)}` : p);
 
+/** Shown instead of a payment link while PAYSTACK_SECRET_KEY isn't live: honest, and gives a human route. */
+function paymentsSoonReply(to: string): Reply {
+  return reply(to).text(
+    '💳 Online payment is being switched on — it opens very soon.',
+    env.SUPPORT_WHATSAPP_URL ? `Want your plan today? Message us and we'll activate it by hand: ${env.SUPPORT_WHATSAPP_URL}` : 'Please check back shortly — nothing is charged.',
+  );
+}
+
 function helpMenu(actor: Actor): Reply {
   const b = actor.business;
   return reply(actor.phone).text(
@@ -365,6 +386,7 @@ function helpMenu(actor: Actor): Reply {
     '💬 Paste a customer\'s "too cost" → closing replies',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
+    '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 🆘 SUPPORT',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
   );
 }
@@ -381,6 +403,7 @@ function plansMenu(actor: Actor): Reply {
       `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
       '50 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
       Number(b.referral_wallet_ngn) > 0 ? `\n🎁 Your ${ngn(b.referral_wallet_ngn)} wallet is applied automatically.` : '',
+      !paymentsLive() ? '\n_Online payment opens very soon — pick a plan and we\'ll sort it with you._' : '',
     )
     .listMenu('Choose plan', [
       { id: 'PAY:starter_5k:monthly', title: 'Starter monthly', description: '₦5,000 / month' },
@@ -401,6 +424,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       return reply(actor.phone).text('✏️ Send the correct version (text or voice note) and I\'ll replace it.');
     case 'TXX': return discardPending(actor, a!);
     case 'TXU': return undoAndRespond(actor, a!);
+    case 'RCPT': return customerReceiptReply(actor, a!);
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
     case 'PLANS': return plansMenu(actor);
@@ -408,7 +432,8 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       const tier = a as 'starter_5k' | 'growth_15k';
       const cycle = b2 as 'monthly' | 'annual';
       if (!(tier in PRICES_NGN) || !['monthly', 'annual'].includes(cycle)) return null;
-      const link = await createCheckoutLink(actor.business, tier, cycle);
+      const link = await createCheckoutLink(actor.business, tier, cycle).catch((e) => { if (e instanceof PaymentsNotLiveError) return null; throw e; });
+      if (!link) return paymentsSoonReply(actor.phone);
       return reply(actor.phone).text(
         `Tap to pay *${ngn(link.amountNgn)}*${link.walletApplied ? ` (${ngn(link.walletApplied)} wallet applied)` : ''} — card, transfer or USSD:`,
         link.url,
