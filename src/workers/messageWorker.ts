@@ -28,6 +28,32 @@ const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const IMG_KEY = (phone: string) => `img_buffer:${phone}`;
 const LOCK_KEY = (phone: string) => `lock:msg:${phone}`;
 
+// ═════════════════════════ SAFE SEND ═════════════════════════
+
+/**
+ * Sending the reply must NEVER make BullMQ retry the whole job: by then the message has already been processed
+ * (onboarding state advanced, pending ledger rows created, video quota charged), so a retry would run those side
+ * effects twice — e.g. the user's "Hi" becoming their business name. We retry only the HTTP send, and only for
+ * transient errors (network, 429, 5xx). Permanent errors (expired token, user not allowed, …) are logged, not thrown.
+ */
+export async function sendReplySafely(r: Reply, to: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await r.send();
+      return true;
+    } catch (err) {
+      const msg = String((err as Error)?.message ?? err);
+      const transient = /fetch failed|ECONNRESET|ETIMEDOUT|WhatsApp API (429|5\d\d)\b/.test(msg);
+      if (!transient || attempt === 2) {
+        console.error(`[send] reply to ${to} not delivered (${transient ? 'gave up after retries' : 'permanent error'}): ${msg}`);
+        return false;
+      }
+      await new Promise((res) => setTimeout(res, 1000 * (attempt + 1) ** 2)); // 1s, 4s
+    }
+  }
+  return false;
+}
+
 // ═════════════════════════ ENTRY ═════════════════════════
 
 async function processInbound(job: Job<InboundJob>, token?: string): Promise<void> {
@@ -46,7 +72,7 @@ async function processInbound(job: Job<InboundJob>, token?: string): Promise<voi
   try {
     void markReadWithTyping(msg.id);
     const r = await handle(msg, profileName);
-    if (r && !r.isEmpty) await r.send();
+    if (r && !r.isEmpty) await sendReplySafely(r, phone);
   } finally {
     await redis.del(LOCK_KEY(phone));
   }
@@ -526,7 +552,7 @@ export async function flushImageBatch(phone: string): Promise<void> {
     const v = brain?.video_request;
     r = await askOrStartVideo(actor, images, v?.product_name, v?.price_ngn, v?.delivery_info);
   }
-  await r.send();
+  await sendReplySafely(r, phone);
 }
 
 // ═════════════════════════ WORKERS ═════════════════════════

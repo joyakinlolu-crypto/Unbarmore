@@ -6,7 +6,7 @@ You will: install 3 tools → fill one settings file → start the bot → open 
 | Tool | Why | Get it |
 |---|---|---|
 | **Node.js 20+** (LTS) | runs the bot | nodejs.org → LTS installer. Check: `node -v` |
-| **Redis** | the bot's message queue | Mac: `brew install redis && brew services start redis` · Windows: install **Docker Desktop**, then `docker run -d -p 6379:6379 redis` · Linux: `sudo apt install redis-server` |
+| **Redis** | the bot's message queue | **Windows (easiest):** install **Memurai Developer** (memurai.com → Download; free; it installs as a background service on port 6379, nothing else to do). Alternatives: Docker Desktop + `docker run -d -p 6379:6379 redis`, or a free Upstash database (use its `rediss://…` address as `REDIS_URL`). Mac: `brew install redis && brew services start redis` |
 | **ngrok** | gives your computer a public address Meta can call | ngrok.com → sign up (free) → download → run the `ngrok config add-authtoken …` line they show you |
 | ffmpeg *(only for video later)* | builds videos | skip for now |
 

@@ -29,7 +29,7 @@ export async function startVideo(
   if (error || !data) throw new Error(`video_jobs insert: ${error?.message}`);
 
   const job: VideoJob = { videoId: data.id as string, businessId: actor.business.id, phone: actor.phone };
-  await videoQueue.add('render', job, { jobId: `video:${data.id}` });
+  await videoQueue.add('render', job, { jobId: `video-${data.id}` });
 
   return reply(actor.phone).text(
     `🎬 Making your ${p.clearance ? '48-hour flash-sale ' : ''}video for *${p.productName}*${p.priceNgn ? ` at ${ngn(p.priceNgn)}` : ''}.`,

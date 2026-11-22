@@ -153,3 +153,12 @@ describe('Sunday CEO template payload: URL button only', () => {
     expect(c.some((x) => x.sub_type === 'quick_reply')).toBe(false);
   });
 });
+
+describe('BullMQ custom job ids', () => {
+  it('contain no ":" (BullMQ throws "Custom Id cannot contain :", which silently dropped every inbound message)', async () => {
+    const fs = await import('node:fs');
+    for (const f of ['src/server.ts', 'src/flows/video.ts']) {
+      for (const m of fs.readFileSync(f, 'utf8').matchAll(/jobId:\s*`([^`]*)`/g)) expect(m[1]).not.toContain(':');
+    }
+  });
+});

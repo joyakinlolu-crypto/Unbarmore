@@ -51,7 +51,7 @@ app.post('/webhooks/whatsapp', { config: { rateLimit: { max: 600, timeWindow: '1
     for (const { msg, profileName } of extractMessages(body)) {
       await touchInbound(msg.from); // last_inbound_at = NOW() → free 24h window
       await inboundQueue.add('msg', { msg, profileName }, {
-        jobId: `wa:${msg.id}`, // BullMQ-level dedupe of Meta retries
+        jobId: `wa-${msg.id}`, // BullMQ-level dedupe of Meta retries (BullMQ forbids ":" in custom job ids)
         // Images may land out of order by ms; everything else is serialised per user in the worker.
       });
     }
