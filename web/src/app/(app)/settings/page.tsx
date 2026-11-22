@@ -2,6 +2,8 @@ import { Gift, Share2 } from 'lucide-react';
 import LogoutButton from '@/components/LogoutButton';
 import { requireSession } from '@/lib/auth';
 import { ngn, waLink } from '@/lib/format';
+import { db } from '@/lib/supabase';
+import { REFERRAL, walletState, WITHDRAW_MIN_REFERRALS } from '@/lib/referral';
 import { botNumber } from '@/lib/whatsapp';
 import ProfileForm from './ProfileForm';
 
@@ -13,6 +15,10 @@ const PLAN_NAME = { trial: 'Free trial', free_limited: 'Free plan', starter_5k: 
 export default async function Settings() {
   const { business: b } = await requireSession();
   const bot = botNumber();
+  // A payout the admin hasn't paid yet (select * so this also works on a database that hasn't had migration 003).
+  const { data: pend } = await db.from('payout_requests').select('*').eq('business_id', b.id).eq('status', 'requested').limit(1).maybeSingle();
+  const wallet = Number(b.referral_wallet_ngn);
+  const ws = walletState(wallet, !!pend);
   const paid = b.subscription_tier === 'starter_5k' || b.subscription_tier === 'growth_15k';
   const share = waLink(bot, `Hi Unbarmore ${b.referral_code}`);
   const shareMsg = `I use Unbarmore to make sales videos, track my profit and catch fake transfer alerts — all on WhatsApp. Use my code ${b.referral_code} and we both get ₦1,000 when you subscribe: ${share}`;
@@ -35,7 +41,19 @@ export default async function Settings() {
           <div className="text-right"><p className="text-xs text-blue-200">Wallet</p><p className="text-2xl font-extrabold">{ngn(b.referral_wallet_ngn)}</p></div>
         </div>
         <a href={`https://wa.me/?text=${encodeURIComponent(shareMsg)}`} target="_blank" rel="noopener" className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-white py-3 font-semibold text-royal"><Share2 size={16} /> Share on WhatsApp</a>
-        {Number(b.referral_wallet_ngn) >= 5000 && <a href={upgrade('PAYOUT')} className="mt-2 block text-center text-sm underline">Cash out {ngn(b.referral_wallet_ngn)} →</a>}
+        {ws.kind === 'unlocked' && (
+          <a href={upgrade('WITHDRAW')} className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-emerald-400 py-3 font-semibold text-emerald-950">💸 Request Cash Payout</a>
+        )}
+        {ws.kind === 'pending' && (
+          <p className="mt-3 rounded-xl bg-white/15 p-3 text-sm">⏳ Payout pending — {ngn(Number(pend?.amount_ngn ?? 0))} to {String(pend?.bank_name ?? 'your bank')} ····{String(pend?.account_number ?? '').slice(-4)}{pend?.ref ? ` · Ref ${String(pend.ref)}` : ''}. We’ll message you on WhatsApp when it’s paid.</p>
+        )}
+        {ws.kind === 'locked' && (
+          <div className="mt-3">
+            <div className="h-2 overflow-hidden rounded-full bg-white/20" role="progressbar" aria-valuenow={ws.progressPct} aria-valuemin={0} aria-valuemax={100}><div className="h-2 rounded-full bg-emerald-300" style={{ width: `${Math.max(4, ws.progressPct)}%` }} /></div>
+            <p className="mt-1.5 text-xs text-blue-100">Cash payout unlocks at {ngn(REFERRAL.WITHDRAW_MIN_NGN)} ({WITHDRAW_MIN_REFERRALS} referrals) — {ws.referralsToGo} more to go.</p>
+            {ws.canDiscount && <p className="mt-1 text-xs text-blue-100">Meanwhile your {ngn(wallet)} already takes money off your next renewal.</p>}
+          </div>
+        )}
       </section>
 
       <section className={card}>

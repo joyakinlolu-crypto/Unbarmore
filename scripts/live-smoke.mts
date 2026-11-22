@@ -15,6 +15,7 @@ const S = await import('../src/db/supabase.ts');
 const L = await import('../src/flows/ledger.ts');
 const P = await import('../src/services/paystack.ts');
 const R = await import('../src/flows/receipts.ts');
+const PO = await import('../src/services/payouts.ts');
 const { db } = S;
 
 const PH = { owner: '2349000000001', ref: '2349000000002', referee: '2349000000003' };
@@ -31,6 +32,7 @@ async function cleanup() {
     const { data: files } = await db.storage.from('pdf-receipts').list(id);
     if (files?.length) await db.storage.from('pdf-receipts').remove(files.map((f) => `${id}/${f.name}`));
   }
+  await db.from('payout_requests').delete().in('business_id', all);
   await db.from('billing_events').delete().in('business_id', all);
   await db.from('referral_ledger').delete().in('business_id', all);
   await db.from('businesses').delete().in('id', all);
@@ -141,6 +143,30 @@ try {
   ok('replayed webhook is ignored (no double credit)', o2 === null && num((await S.getBusiness(referrer.id)).referral_wallet_ngn) === 1000);
   const { count: ledgerRows } = await db.from('referral_ledger').select('id', { count: 'exact', head: true }).in('business_id', [referrer.id, referee.id]);
   ok('referral_ledger has the 2 audit rows', ledgerRows === 2);
+
+  // ── 8b. referral cash payouts (migration 003) ──
+  const probe = await db.from('payout_requests').select('ref').limit(1);
+  if (probe.error) console.log('⏭️  payout database checks skipped: run supabase/migrations/003_referral_payouts.sql in Supabase, then re-run');
+  else {
+    const wal = async () => num((await S.getBusiness(referrer.id)).referral_wallet_ngn);
+    const setW = (v: number) => db.from('businesses').update({ referral_wallet_ngn: v }).eq('id', referrer.id);
+    await setW(4000);
+    const low = await PO.requestPayout(referrer.id, 'GTBank', '0123456789');
+    ok('payout below ₦5,000 refused, wallet untouched', low.reason === 'below_minimum' && (await wal()) === 4000);
+    await setW(5000);
+    ok('bad account numbers refused by the database (9, 11 digits, letters)', (await Promise.all(['123456789', '01234567890', '01234abc89'].map((a) => PO.requestPayout(referrer.id, 'GTBank', a)))).every((x) => x.reason === 'bad_account') && (await wal()) === 5000);
+    // the real race: two requests for the same wallet, sent at the same instant over the network
+    const [x, y] = await Promise.all([PO.requestPayout(referrer.id, 'GTBank', '0123456789'), PO.requestPayout(referrer.id, 'Access Bank', '0987654321')]);
+    ok('two simultaneous withdrawals → exactly ONE succeeds', [x, y].filter((z) => z.ok).length === 1 && [x, y].some((z) => z.reason === 'already_pending'), `${x.reason} / ${y.reason}`);
+    const winner = x.ok ? x : y;
+    const { data: led } = await db.from('referral_ledger').select('status, amount_ngn').eq('business_id', referrer.id).eq('entry_type', 'cash_payout');
+    ok('wallet ₦0, ONE pending ledger row (−₦5,000), ONE payout row', (await wal()) === 0 && led?.length === 1 && led[0]!.status === 'pending' && num(led[0]!.amount_ngn) === -5000 && (await PO.pendingPayout(referrer.id))?.ref === winner.ref);
+    ok('PAID is recorded once; a second decision is refused', (await PO.decidePayout(winner.ref!, 'paid')).ok && (await PO.decidePayout(winner.ref!, 'rejected')).reason === 'already_decided');
+    await setW(7000);
+    const again = await PO.requestPayout(referrer.id, 'Opay', '8101234567');
+    const rej = await PO.decidePayout(again.ref!, 'rejected');
+    ok('after PAID a new payout works; REJECT puts ₦7,000 back in the wallet', again.ok && rej.ok && (await wal()) === 7000);
+  }
 
   // ── 9. RLS: the public/anon key must NOT read data ──
   const anonKey = process.env.SUPABASE_ANON_KEY;

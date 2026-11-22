@@ -38,6 +38,8 @@ const schema = z.object({
   TTS_PROVIDER: z.enum(['gemini', 'google', 'azure']).default('gemini'),
   GEMINI_TTS_MODEL: z.string().default('gemini-3.8-flash-lite-tts'),
   GEMINI_TTS_VOICE: z.string().default('Kore'),
+  /** Tried when the main speech model is out of quota / overloaded (each model has its own quota). */
+  GEMINI_TTS_FALLBACK_MODEL: z.string().default('gemini-3.1-flash-tts-preview'),
   GOOGLE_TTS_VOICE: z.string().default('en-NG-Chirp3-HD-Achird'),
   AZURE_SPEECH_KEY: z.string().optional(),
   AZURE_SPEECH_REGION: z.string().default('westeurope'),

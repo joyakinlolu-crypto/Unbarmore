@@ -21,15 +21,22 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
 
 async function geminiTts(text: string, pidgin: boolean): Promise<Voiceover> {
   const style = pidgin ? 'in a warm, energetic Nigerian Pidgin voice' : 'in a warm, energetic Nigerian (Lagos) English accent';
-  const res = await beta.models.generateContent({
-    model: env.GEMINI_TTS_MODEL,
-    contents: `Read this short advert ${style}, like a confident market seller. Do not add anything:\n${text}`,
-    config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } } } },
-  });
-  const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
-  if (!part?.data) throw new Error('Gemini TTS returned no audio');
-  const raw = Buffer.from(part.data, 'base64');
-  return /wav/i.test(part.mimeType ?? '') ? { data: raw, ext: 'wav', mime: 'audio/wav' } : { data: pcmToWav(raw), ext: 'wav', mime: 'audio/wav' };
+  const models = [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL].filter((m, i, a) => m && a.indexOf(m) === i);
+  let lastErr: unknown;
+  for (const model of models) {
+    try {
+      const res = await beta.models.generateContent({
+        model,
+        contents: `Read this short advert ${style}, like a confident market seller. Do not add anything:\n${text}`,
+        config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } } } },
+      });
+      const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
+      if (!part?.data) throw new Error('Gemini TTS returned no audio');
+      const raw = Buffer.from(part.data, 'base64');
+      return /wav/i.test(part.mimeType ?? '') ? { data: raw, ext: 'wav', mime: 'audio/wav' } : { data: pcmToWav(raw), ext: 'wav', mime: 'audio/wav' };
+    } catch (e) { lastErr = e; } // out of quota / overloaded → next model
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 /** Nigerian-accented voiceover. Default provider "gemini" needs no extra account (uses GEMINI_API_KEY). */

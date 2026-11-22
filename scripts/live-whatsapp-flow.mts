@@ -123,6 +123,7 @@ async function cleanup() {
       const files = (await l.json().catch(() => [])) as { name: string }[];
       if (Array.isArray(files) && files.length) await fetch(`${SB}/storage/v1/object/${bucket}`, { method: 'DELETE', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: files.map((f) => `${b.id}/${f.name}`) }) });
     }
+    for (const b of bs) await rest(`payout_requests?business_id=eq.${b.id}`, { method: 'DELETE' });
     await rest(`businesses?owner_phone=eq.${phone}`, { method: 'DELETE' });
     await rest(`whatsapp_sessions?phone_number=eq.${phone}`, { method: 'DELETE' });
   }
@@ -261,6 +262,83 @@ try {
   const t3 = Date.now(); while (Date.now() - t3 < 30_000 && sent.length === b3) await sleep(300);
   const other = sent.slice(b3).map(view);
   ok('ADMIN from any other number gets NOTHING (treated as an ordinary first message)', other.length >= 1 && !other.some((v) => /live stats|Est\. MRR|Businesses:/.test(v.text)), other[0]?.text.slice(0, 80));
+
+  // ───── 12e. referral wallet: ₦1,000 renewal discount, ₦5,000 cash payout (needs migration 003 on the database) ─────
+  const payoutsReady = Array.isArray(await (await rest('payout_requests?select=ref&limit=1')).json());
+  if (!payoutsReady) console.log('⏭️  payout tests skipped: run supabase/migrations/003_referral_payouts.sql in Supabase, then re-run');
+  else {
+    const setWallet = (v: number) => rest(`businesses?id=eq.${biz!.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ referral_wallet_ngn: v }) });
+    const wallet = async () => Number((await rows(`businesses?id=eq.${biz!.id}&select=referral_wallet_ngn`))[0]?.referral_wallet_ngn);
+    const state = async () => String((await rows(`whatsapp_sessions?phone_number=eq.${PH}&select=current_state`))[0]?.current_state);
+
+    await setWallet(3000);
+    r = await ask('withdraw-locked', () => text('WITHDRAW'), (v) => /unlocks at/i.test(v.text));
+    ok('WITHDRAW with ₦3,000 → "unlocks at ₦5,000 (5 referrals) — 2 more", renewal discount mentioned, nothing started', !!r.reply && /₦5,000/.test(r.reply.text) && /2 more referrals/.test(r.reply.text) && /renewal/.test(r.reply.text) && (await state()) === 'IDLE', r.reply?.text.replace(/\n/g, ' | '));
+    r = await ask('refer-locked', () => text('REFER'), (v) => /Wallet/i.test(v.text));
+    ok('REFER at ₦3,000 explains the rules and shows NO withdraw button', !!r.reply && /₦1,000/.test(r.reply.text) && /WITHDRAW/.test(r.reply.text) && !r.reply.buttons.some((b) => b.id === 'WITHDRAW'));
+
+    await setWallet(5000);
+    r = await ask('refer-unlocked', () => text('REFER'), (v) => v.buttons.some((b) => b.id === 'WITHDRAW'));
+    ok('REFER at ₦5,000 → "💸 Withdraw cash" button appears', !!r.reply);
+    r = await ask('withdraw-tap', () => button('WITHDRAW'), (v) => /bank name/i.test(v.text));
+    ok('tap Withdraw → asks for Bank Name + 10-digit account number', !!r.reply && /10-digit/.test(r.reply.text) && (await state()) === 'AWAITING_PAYOUT_DETAILS');
+
+    r = await ask('bad1', () => text('ok'), (v) => /10-digit/.test(v.text));
+    ok('junk like "ok" is NOT accepted as bank details (wallet untouched)', !!r.reply && (await wallet()) === 5000 && (await state()) === 'AWAITING_PAYOUT_DETAILS');
+    r = await ask('bad2', () => text('GTBank 08012345678'), (v) => /10-digit/.test(v.text));
+    ok('an 11-digit phone number is refused as an account number', !!r.reply && (await wallet()) === 5000);
+
+    const sent0 = sent.length;
+    r = await ask('payout', () => text('GTBank 0123456789'), (v) => /Payout requested/.test(v.text));
+    const ref = r.reply?.text.match(/WD-[0-9A-F]{6}/)?.[0] ?? '';
+    ok('valid details → "Payout requested", pending, reference WD-XXXXXX, account masked', !!r.reply && !!ref && /pending/i.test(r.reply.text) && /\*\*\*\*6789/.test(r.reply.text) && !/0123456789/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+    const pr = (await rows(`payout_requests?business_id=eq.${biz!.id}&select=status,bank_name,account_number,amount_ngn,ref`))[0];
+    const led = (await rows(`referral_ledger?business_id=eq.${biz!.id}&entry_type=eq.cash_payout&select=status,amount_ngn,notes`))[0];
+    ok('database: wallet is ₦0, referral_ledger row is PENDING (−₦5,000), payout row holds bank + NUBAN', (await wallet()) === 0 && led?.status === 'pending' && Number(led?.amount_ngn) === -5000 && pr?.status === 'requested' && pr?.bank_name === 'GTBank' && pr?.account_number === '0123456789' && pr?.ref === ref);
+    await sleep(2500);
+    const adminMsg = sent.slice(sent0).map(view).find((v) => /Payout request WD-/.test(v.text));
+    ok('ADMIN_PHONE is notified on WhatsApp with full bank details and the PAID / REJECT commands', !!adminMsg && /0123456789/.test(adminMsg.text) && new RegExp(`PAID ${ref}`).test(adminMsg.text) && new RegExp(`REJECT ${ref}`).test(adminMsg.text), adminMsg?.text.replace(/\n/g, ' | ').slice(0, 160));
+    ok('conversation state is cleared after the request', (await state()) === 'IDLE');
+
+    await setWallet(9000); // even if the wallet refills, a pending payout blocks another one
+    r = await ask('double', () => text('WITHDRAW'), (v) => /already have a payout/i.test(v.text));
+    ok('DOUBLE WITHDRAWAL blocked: wallet refilled to ₦9,000 but a payout is still pending → refused', !!r.reply && (await wallet()) === 9000 && (await rows(`payout_requests?business_id=eq.${biz!.id}&select=id`)).length === 1);
+
+    r = await ask('payouts-list', () => text('PAYOUTS'), (v) => /pending/i.test(v.text) && v.text.includes(ref));
+    ok('admin PAYOUTS lists the pending request', !!r.reply);
+    const before = await rows(`payout_requests?ref=eq.${ref}&select=status`);
+    const b4 = sent.length;
+    await webhook({ type: 'text', text: { body: `PAID ${ref}` } }, undefined, PH2);
+    await sleep(6000);
+    ok('a NON-admin number cannot mark a payout paid', before[0]?.status === 'requested' && (await rows(`payout_requests?ref=eq.${ref}&select=status`))[0]?.status === 'requested' && !sent.slice(b4).map(view).some((v) => /marked \*paid\*/.test(v.text)));
+
+    const bPaid = sent.length;
+    r = await ask('paid', () => text(`PAID ${ref}`), (v) => /marked \*paid\*/.test(v.text));
+    await sleep(2500);
+    const notice = sent.slice(bPaid).map(view).find((v) => /payout has been sent/i.test(v.text));
+    ok('admin "PAID WD-…" → recorded as paid, and the business is told (masked account)', !!r.reply && !!notice && /\*\*\*\*6789/.test(notice.text) && (await rows(`payout_requests?ref=eq.${ref}&select=status`))[0]?.status === 'paid' && (await rows(`referral_ledger?business_id=eq.${biz!.id}&entry_type=eq.cash_payout&select=status`))[0]?.status === 'completed');
+    r = await ask('paid-again', () => text(`PAID ${ref}`), (v) => /already decided/i.test(v.text));
+    ok('deciding the same payout twice is refused', !!r.reply);
+
+    r = await ask('withdraw-again', () => text('WITHDRAW'), (v) => /bank name/i.test(v.text));
+    ok('after PAID a new payout can be requested again', !!r.reply);
+    r = await ask('payout2', () => text('Opay 8101234567'), (v) => /Payout requested/.test(v.text));
+    const ref2 = r.reply?.text.match(/WD-[0-9A-F]{6}/)?.[0] ?? '';
+    const bRej = sent.length;
+    r = await ask('reject', () => text(`REJECT ${ref2}`), (v) => /rejected/i.test(v.text));
+    await sleep(2500);
+    ok('admin "REJECT WD-…" → ₦9,000 returns to the wallet and the business is told', !!r.reply && (await wallet()) === 9000 && sent.slice(bRej).map(view).some((v) => /back in your wallet/i.test(v.text)));
+
+    r = await ask('withdraw-cancel', () => text('WITHDRAW'), (v) => /bank name/i.test(v.text));
+    r = await ask('cancel', () => text('CANCEL'), (v) => /cancelled/i.test(v.text));
+    ok('CANCEL stops it and leaves the wallet alone', !!r.reply && (await wallet()) === 9000 && (await state()) === 'IDLE');
+
+    await ask('withdraw-stale', () => text('WITHDRAW'), (v) => /bank name/i.test(v.text));
+    await rest(`whatsapp_sessions?phone_number=eq.${PH}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ pending_payload: { at: Date.now() - 3600_000 } }) });
+    r = await ask('stale', () => text('sold 2 lace 50k cash'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+    ok('a forgotten WITHDRAW (older than 10 min) does not swallow the next sale message', !!r.reply && (await wallet()) === 9000);
+    const staleId = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id; if (staleId) await ask('stale-confirm', () => button(staleId), (v) => /Saved/.test(v.text));
+  }
 
   // ───── 13. duplicate delivery from Meta (retries) must not double-reply ─────
   const dupId = `wamid.FLOWDUP${Date.now()}`;

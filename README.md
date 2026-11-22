@@ -98,3 +98,11 @@ set -a; . web/.env.local; set +a; npx tsx scripts/live-web-e2e.mts
 `live-whatsapp-flow` runs a *pretend Meta* server (`WHATSAPP_GRAPH_BASE`, testing only), so every reply the bot would send is captured and checked.
 Gotchas learned: don't export the bot's `NODE_ENV=development` into the web build (Next prerender crash); kill stale `next-server` processes (port 3333).
 Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cloud account needed.
+
+## Referral wallet & cash payouts (migration `003_referral_payouts.sql`)
+- Every paid referral credits **₦1,000 to both sides**. **Any balance from ₦1,000** automatically discounts the owner's own renewal.
+- **Cash payout unlocks at ₦5,000** (5 referrals): `WITHDRAW` in WhatsApp, or **Request Cash Payout** in the web app's Settings. The whole wallet is paid out.
+- The bot asks for **Bank Name + 10-digit NUBAN**, validates them strictly, marks the request **pending** in `referral_ledger`, zeroes the wallet and messages `ADMIN_PHONE`.
+- Double withdrawal is blocked by the database (locked wallet row + a unique "one pending payout per business" index + a 10-digit CHECK).
+- Admin (from `ADMIN_PHONE`): `PAYOUTS` lists pending · `PAID WD-XXXXXX` after paying · `REJECT WD-XXXXXX` returns the money to the wallet. The business is told either way.
+- SQL tests: `psql -v ON_ERROR_STOP=1 -f supabase/tests/003_payouts_test.sql` on a scratch database with 001–003 applied (22 checks, incl. a two-sessions race).

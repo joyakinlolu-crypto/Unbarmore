@@ -53,3 +53,17 @@ export const METRIC_LABEL: Record<Metric, string> = {
   pdf_receipts_used_this_month: 'PDF receipts',
   ceo_reports_used_this_month: 'CEO reports',
 };
+
+/**
+ * Referral wallet rules — single source for the bot (the web app mirrors these in web/src/lib/referral.ts; a test keeps all three in sync,
+ * including the 5000 hard-coded in supabase/migrations/003_referral_payouts.sql).
+ */
+export const REFERRAL = {
+  /** Credited to BOTH sides when a referred business makes its first paid subscription. */
+  REWARD_NGN: 1000,
+  /** Any wallet balance from here up automatically discounts the owner's own renewal. */
+  DISCOUNT_MIN_NGN: 1000,
+  /** Cash payout unlocks here: 5 paid referrals × ₦1,000. */
+  WITHDRAW_MIN_NGN: 5000,
+} as const;
+export const WITHDRAW_MIN_REFERRALS = REFERRAL.WITHDRAW_MIN_NGN / REFERRAL.REWARD_NGN;

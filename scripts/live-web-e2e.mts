@@ -91,6 +91,20 @@ try {
   ok('/ledger?tab=debtors shows Mama Tunde ₦95,000 with a wa.me reminder link', dl.includes('Mama Tunde') && text(dl).includes('₦95,000') && /https:\/\/wa\.me\/\?text=Hello%20Mama/.test(dl));
   const st = text(await (await fetch(`${BASE}/settings`, { headers: { cookie } })).text());
   ok('/settings shows this business\'s referral code', st.includes(biz!.referral_code as string));
+  // referral wallet card on /settings: locked → unlocked → pending
+  const settingsHtml = async () => (await (await fetch(`${BASE}/settings`, { headers: { cookie } })).text()).replace(/<!--.*?-->/g, '');
+  await db.from('businesses').update({ referral_wallet_ngn: 3000 }).eq('id', bid);
+  let sh = await settingsHtml();
+  ok('wallet ₦3,000: shows progress "2 more to go" + renewal-discount note, NO payout button', /2 more to go/.test(sh) && /takes money off your next renewal/.test(sh) && !/Request Cash Payout/.test(sh));
+  await db.from('businesses').update({ referral_wallet_ngn: 5000 }).eq('id', bid);
+  sh = await settingsHtml();
+  ok('wallet ₦5,000: "💸 Request Cash Payout" button appears, opening WhatsApp with WITHDRAW', /Request Cash Payout/.test(sh) && /wa\.me\/2348000000000\?text=WITHDRAW/.test(sh));
+  await db.from('payout_requests').insert({ business_id: bid, amount_ngn: 5000, bank_details: 'GTBank · 0123456789', status: 'requested' });
+  await db.from('payout_requests').update({ bank_name: 'GTBank', account_number: '0123456789', ref: 'WD-E2E001' }).eq('business_id', bid); // only works once migration 003 is applied
+  sh = await settingsHtml();
+  ok('payout pending: button replaced by a "Payout pending" note (no double request from the web either)', /Payout pending/.test(sh) && !/Request Cash Payout/.test(sh));
+  await db.from('payout_requests').delete().eq('business_id', bid);
+  await db.from('businesses').update({ referral_wallet_ngn: 0 }).eq('id', bid);
   const pdf = await fetch(`${BASE}/api/export`, { headers: { cookie } });
   const pdfBuf = Buffer.from(await pdf.arrayBuffer());
   ok('/api/export returns a real PDF statement', pdf.status === 200 && pdfBuf.subarray(0, 4).toString() === '%PDF' && pdfBuf.length > 3000, `${pdfBuf.length} bytes`);

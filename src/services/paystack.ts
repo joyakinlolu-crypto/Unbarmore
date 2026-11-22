@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
-import { PRICES_NGN } from '../config/plans.js';
+import { PRICES_NGN, REFERRAL } from '../config/plans.js';
 import { db, getBusiness, type Business } from '../db/supabase.js';
 
 const API = 'https://api.paystack.co';
@@ -62,7 +62,9 @@ const syntheticEmail = (b: Business) => `${b.owner_phone}@wa.unbarmore.com`;
 export async function createCheckoutLink(b: Business, tier: PaidTier, interval: Interval): Promise<{ url: string; amountNgn: number; walletApplied: number }> {
   if (!paymentsLive() || !isReal(PLAN_CODES[tier][interval])) throw new PaymentsNotLiveError();
   const price = PRICES_NGN[tier][interval];
-  const walletApplied = Math.min(Number(b.referral_wallet_ngn), price - 100); // Paystack minimum ₦100
+  // Any balance from ₦1,000 discounts the owner's own renewal (never below Paystack's ₦100 minimum charge).
+  const wallet = Number(b.referral_wallet_ngn);
+  const walletApplied = wallet >= REFERRAL.DISCOUNT_MIN_NGN ? Math.min(wallet, price - 100) : 0;
   const amountNgn = price - Math.max(0, walletApplied);
   const metadata = { business_id: b.id, tier, interval, wallet_applied: Math.max(0, walletApplied) };
 
@@ -178,10 +180,4 @@ export async function handlePaystackEvent(e: PaystackEvent): Promise<PaymentOutc
     referrerId: row.referrer_id,
     referralCredited: row.referral_credited,
   };
-}
-
-export async function requestPayout(businessId: string, bankDetails: string): Promise<number> {
-  const { data, error } = await db.rpc('request_payout', { p_business_id: businessId, p_bank_details: bankDetails });
-  if (error) throw new Error(`request_payout: ${error.message}`);
-  return Number(data ?? 0);
 }

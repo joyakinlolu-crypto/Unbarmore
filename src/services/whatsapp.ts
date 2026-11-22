@@ -119,7 +119,7 @@ export class Reply {
   private footerText: string | null = null;
   private replyTo: string | null = null;
 
-  constructor(private readonly to: string) {}
+  constructor(readonly to: string) {}
 
   text(...lines: (string | null | undefined | false)[]): this {
     for (const l of lines) if (l) this.lines.push(l);

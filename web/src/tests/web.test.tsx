@@ -33,6 +33,7 @@ import { hashToken, newRawToken } from '@/lib/auth';
 import { waNumber, watMonthStart } from '@/lib/format';
 import { signSession, verifySession } from '@/lib/jwt';
 import { Md } from '@/components/Md';
+import { walletState } from '@/lib/referral';
 
 describe('session JWT', () => {
   const claims = { sub: 'u1', business_id: 'b1', role: 'owner' as const };
@@ -211,4 +212,18 @@ describe('message 3 of 3: open with the biggest exact ₦ leak', () => {
     expect(buildAdvisorSystemPrompt(s)).not.toContain('LAST FREE ADVISOR MESSAGE');
     expect(buildAdvisorSystemPrompt(snap({}), { finalFreeMessage: true })).not.toContain('LAST FREE ADVISOR MESSAGE');
   });
+});
+
+describe('referral wallet card (₦5,000 payout threshold, ₦1,000 renewal discount)', () => {
+  it('under ₦5,000: locked, with the number of referrals still needed', () => {
+    expect(walletState(0, false)).toEqual({ kind: 'locked', referralsToGo: 5, progressPct: 0, canDiscount: false });
+    expect(walletState(3000, false)).toEqual({ kind: 'locked', referralsToGo: 2, progressPct: 60, canDiscount: true });
+    expect(walletState(4000, false)).toMatchObject({ kind: 'locked', referralsToGo: 1 });
+  });
+  it('a wallet under ₦1,000 cannot discount a renewal; ₦1,000 can', () => {
+    expect(walletState(500, false)).toMatchObject({ canDiscount: false });
+    expect(walletState(1000, false)).toMatchObject({ canDiscount: true });
+  });
+  it('₦5,000 or more unlocks the cash payout button', () => { expect(walletState(5000, false)).toEqual({ kind: 'unlocked' }); expect(walletState(12000, false)).toEqual({ kind: 'unlocked' }); });
+  it('a pending payout wins over everything (no second button)', () => { expect(walletState(9000, true)).toEqual({ kind: 'pending' }); expect(walletState(0, true)).toEqual({ kind: 'pending' }); });
 });

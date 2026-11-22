@@ -12,7 +12,10 @@ import { imageBatchQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey } from '../lib/money.js';
 import { generateStructured, readBankAlert, routeMessage, type BrainResult } from '../services/geminiBrain.js';
 import { connectSheet, extractSheetId, SHEETS_SERVICE_EMAIL } from '../services/googleSheets.js';
-import { createCheckoutLink, paymentsLive, PaymentsNotLiveError, requestPayout } from '../services/paystack.js';
+import { createCheckoutLink, paymentsLive, PaymentsNotLiveError } from '../services/paystack.js';
+import { pendingPayout } from '../services/payouts.js';
+import { adminPayoutCommand, adminTarget, maskAccount, PAYOUT_DETAILS_TTL_MS, submitPayout, withdrawStart } from '../flows/payouts.js';
+import { REFERRAL, WITHDRAW_MIN_REFERRALS } from '../config/plans.js';
 import { downloadMedia, markReadWithTyping, reply, type Reply, type WaInboundMessage } from '../services/whatsapp.js';
 import { answerQuery } from '../flows/insights.js';
 import {
@@ -90,6 +93,10 @@ async function processInbound(job: Job<InboundJob & { claimed?: boolean }>, toke
 async function handle(msg: WaInboundMessage, profileName: string | null): Promise<Reply | null> {
   const phone = msg.from;
   if (msg.type === 'text' && /^admin$/i.test(msg.text?.body?.trim() ?? '') && isAdmin(phone)) return adminStatsReply(phone);
+  if (msg.type === 'text' && isAdmin(phone)) {
+    const cmd = await adminPayoutCommand(phone, msg.text?.body ?? ''); // PAYOUTS · PAID WD-XXXXXX · REJECT WD-XXXXXX
+    if (cmd) { if (cmd.userNotice) await sendReplySafely(cmd.userNotice.reply, cmd.userNotice.to); return cmd.reply; }
+  }
   const actor = await resolveActor(phone);
   let session = await getSession(phone);
 
@@ -249,13 +256,13 @@ async function onState(actor: Actor, text: string, session: Session): Promise<Re
       });
     }
     case 'AWAITING_PAYOUT_DETAILS': {
-      await setSession(actor.phone, 'IDLE', {});
-      const amount = await requestPayout(actor.business.id, text.slice(0, 300));
-      if (!amount) return reply(actor.phone).text('Your wallet is below ₦5,000, so I can\'t pay out yet.');
-      if (env.OPS_ALERT_PHONE) {
-        void reply(env.OPS_ALERT_PHONE).text(`💸 Payout request ${ngn(amount)} — ${actor.business.name} (${actor.phone})`, text).send().catch(() => undefined);
-      }
-      return reply(actor.phone).text(`✅ Payout of ${ngn(amount)} requested. It will reach your account within 2 working days.`);
+      // Don't let a forgotten WITHDRAW swallow tomorrow's "sold 2 lace…": the state expires.
+      if (Date.now() - Number(p.at ?? 0) > PAYOUT_DETAILS_TTL_MS) { await setSession(actor.phone, 'IDLE', {}); return null; }
+      if (/^(cancel|stop|no)$/i.test(text.trim())) { await setSession(actor.phone, 'IDLE', {}); return reply(actor.phone).text('Okay, cancelled. Your wallet is unchanged.'); }
+      const res = await submitPayout(actor, text);
+      const target = adminTarget();
+      if (res.adminNotice && target) await sendReplySafely(res.adminNotice, target); // ADMIN_PHONE must have messaged the bot in the last 24h (Meta rule); PAYOUTS always lists pending ones
+      return res.reply;
     }
     case 'AWAITING_SHEET_LINK': {
       const id = extractSheetId(text);
@@ -310,15 +317,21 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (['MENU', 'HELP', '?'].includes(upper)) return helpMenu(actor);
   if (upper === 'I HAVE PAID') return reply(actor.phone).text(`Thanks! Your plan: *${b.subscription_tier}*. If you just paid, it updates within a minute.`);
 
+  if (['WITHDRAW', 'CASH OUT', 'CASHOUT', 'PAYOUT'].includes(upper)) return withdrawStart(actor);
   if (['REFER', 'WALLET', 'REFERRAL'].includes(upper)) {
     const link = `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent(`Hi Unbarmore ${b.referral_code}`)}`;
+    const wallet = Number(b.referral_wallet_ngn);
+    const pend = await pendingPayout(b.id);
     const r = reply(actor.phone).text(
-      `🎁 Wallet: *${ngn(b.referral_wallet_ngn)}*`,
-      `Your code: *${b.referral_code}*`,
-      'When someone you refer subscribes, you BOTH get ₦1,000. It pays for your next renewal, or cash out from ₦5,000.',
+      `🎁 Wallet: *${ngn(wallet)}*  ·  Your code: *${b.referral_code}*`,
+      '',
+      `• Each referral who subscribes = *${ngn(REFERRAL.REWARD_NGN)}* for you AND for them.`,
+      `• Any balance from ${ngn(REFERRAL.DISCOUNT_MIN_NGN)} takes money off your own renewal — automatically.`,
+      `• Cash payout unlocks at *${ngn(REFERRAL.WITHDRAW_MIN_NGN)}* (${WITHDRAW_MIN_REFERRALS} referrals): type *WITHDRAW*.`,
+      pend ? `\n⏳ Payout pending: ${ngn(pend.amountNgn)} → ${pend.bankName ?? 'bank'} ${maskAccount(pend.accountNumber)}${pend.ref ? ` (${pend.ref})` : ''}` : '',
       '', 'Forward this to other sellers 👇', link,
     );
-    if (Number(b.referral_wallet_ngn) >= 5000) r.button('PAYOUT', '💸 Cash out');
+    if (wallet >= REFERRAL.WITHDRAW_MIN_NGN && !pend) r.button('WITHDRAW', '💸 Withdraw cash');
     return r;
   }
 
@@ -442,8 +455,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       );
     }
     case 'PAYOUT':
-      await setSession(actor.phone, 'AWAITING_PAYOUT_DETAILS', {});
-      return reply(actor.phone).text('Send your bank name, account number and account name in one message.');
+    case 'WITHDRAW': return withdrawStart(actor);
     case 'THEME': {
       const theme = a as Actor['business']['studio_theme'];
       if (!['clean_minimalist', 'luxury_boutique', 'outdoor_lifestyle'].includes(theme)) return null;

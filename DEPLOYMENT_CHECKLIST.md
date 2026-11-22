@@ -3,7 +3,7 @@
 Two deployments from this one GitHub repo:
 **Railway** = the WhatsApp bot (root `Dockerfile` + `railway.json`) · **Vercel** = the web app (`web/`, with `web/vercel.json`).
 
-Done once, before deploying: both SQL files in `supabase/migrations/` have been run in Supabase (`001` then `002`).
+Done once, before deploying: all THREE SQL files in `supabase/migrations/` have been run in Supabase, in order: `001`, `002`, then `003` (referral cash payouts). Without `003` everything else works, but WITHDRAW says "payouts are being switched on".
 
 ---
 
@@ -40,7 +40,7 @@ Done once, before deploying: both SQL files in `supabase/migrations/` have been 
    - `GEMINI_TEXT_FALLBACK_MODEL`
    - `REDIS_URL`   *(click "Add Reference" → the Redis service's `REDIS_URL`)*
    - `WEB_APP_URL`   *(the Vercel address from step A.4)*
-   - `ADMIN_PHONE`   *(your own number, digits only — enables the ADMIN command)*
+   - `ADMIN_PHONE`   *(your own number, digits only — enables ADMIN, and gets the WhatsApp alert for each cash-payout request. WhatsApp only lets the bot message you if you messaged it in the last 24 hours, so send it `ADMIN` or `PAYOUTS` once a day; requests are never lost — `PAYOUTS` lists every pending one)*
    - `SUPPORT_WHATSAPP_URL`   *(e.g. `https://wa.me/234…` — shown by SUPPORT and when payments aren't live)*
 4. **Settings → Networking → Generate Domain.** Railway checks `/healthz`; the bot is up when it turns green.
 
@@ -65,7 +65,7 @@ Then in Paystack set the webhook to `https://<your-railway-domain>/webhooks/pays
 - `GOOGLE_SHEETS_SA_JSON_B64` — Growth-plan Google Sheets sync
 - `TTS_PROVIDER` (default `gemini`, no extra account needed), `GEMINI_TTS_MODEL`, `GEMINI_TTS_VOICE`
 - `INTERIM_NOTICE_MS` — seconds-in-ms before the "Processing your entry..." note (default 12000)
-- `OPS_ALERT_PHONE` — gets a WhatsApp when someone requests a referral payout
+- `OPS_ALERT_PHONE` — only a fallback for `ADMIN_PHONE` (the payout alerts go to `ADMIN_PHONE`)
 
 ## Smoke test after deploying (2 minutes, from your phone)
 1. Message the WhatsApp number: `Hi` → it asks for a business name.
