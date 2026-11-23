@@ -72,3 +72,6 @@ Then in Paystack set the webhook to `https://<your-railway-domain>/webhooks/pays
 2. Finish onboarding, send `sold 2 lace 50k cash`, tap **Confirm**, tap **🧾 Customer Receipt**.
 3. Send `CLOSE`, `SUPPORT`, and (from `ADMIN_PHONE`) `ADMIN`.
 4. Send `LOGIN` → open the link → your dashboard on the Vercel address.
+
+## Auto-deploys
+Vercel (web/) and Railway (bot) redeploy automatically on every push to `main`.
