@@ -47,6 +47,7 @@ try {
   ok('createBusiness → referral code UNBAR-XXXX', /^UNBAR-[A-Z2-9]{4}$/.test(biz.referral_code), biz.referral_code);
   ok('new business starts on trial', biz.subscription_tier === 'trial');
   const actor = (await S.resolveActor(PH.owner))!;
+  actor.business.logo_url = 'none'; // the first receipt asks "Do you have a logo?" (covered in the conversation test); here the owner already chose to use the business name
   ok('resolveActor finds the owner', actor?.business.id === biz.id && !actor.isStaff);
 
   // ── 2. Ledger: 3 lines from ONE message, human-in-the-loop ──
