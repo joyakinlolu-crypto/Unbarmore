@@ -437,6 +437,71 @@ try {
   ok('debt payment confirm → "🎉 ₦20,000 collected from your customers" + "Money Unbarmore got back for you: ₦20,000"', !!r.reply && /🎉 ₦20,000 collected from your customers/.test(r.reply.text) && /Money Unbarmore got back for you: ₦20,000/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
   ok('…still ONE message, and the debt is back to ₦0', real(r.all).length === 1 && Number((await rows(`customers?business_id=eq.${biz!.id}&select=outstanding_debt_ngn`))[0]?.outstanding_debt_ngn) === 0);
 
+  // ───── a shop owner's FIRST DAY: old debts, opening stock, phone numbers, honest "not yet" (the real-user bug) ─────
+  const owed = async () => (await rows(`customers?business_id=eq.${biz!.id}&select=name,outstanding_debt_ngn,debt_due_date&outstanding_debt_ngn=gt.0&order=name`)) as { name: string; outstanding_debt_ngn: string; debt_due_date: string | null }[];
+  const txCount = async () => (await rows(`transactions?business_id=eq.${biz!.id}&select=id&status=eq.confirmed`)).length;
+  const quotaNow = async () => Number((await rows(`businesses?id=eq.${biz!.id}&select=tx_logged_this_month`))[0]?.tx_logged_this_month);
+  const tx0 = await txCount(), q0 = await quotaNow();
+
+  r = await ask('debts-vague', () => text('3 persons own me money before now'), (v) => /names and amounts/i.test(v.text));
+  ok('"3 persons own me money before now" → asks for names and amounts (NOT "Nobody owes you money")', !!r.reply && !/Nobody owes/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+
+  r = await ask('debts-list', () => text('3 people are owning me money.\n\n1. 20,000 Olowoyeye (to pay next week)\n2. 14,000 Femi (not yet mentioned date)\n3. 28,000 kalu (month end)'), (v) => v.buttons.some((b) => b.id.startsWith('ACTOK:')));
+  const dtxt = r.reply?.text ?? '';
+  ok('typed list → preview of all three with the total ₦62,000 and Confirm / Cancel', /Olowoyeye/.test(dtxt) && /Femi/.test(dtxt) && /[Kk]alu/.test(dtxt) && /₦62,000/.test(dtxt) && r.reply!.buttons.some((b) => b.id.startsWith('ACTNO:')), dtxt.replace(/\n/g, ' | ').slice(0, 260));
+  ok('nothing is saved before Confirm', (await owed()).length === 0);
+  const debtOk = r.reply?.buttons.find((b) => b.id.startsWith('ACTOK:'))?.id ?? '';
+
+  r = await ask('debts-confirm', () => button(debtOk), (v) => /Added 3 debts/.test(v.text));
+  ok('Confirm → "Added 3 debts: ₦62,000", ONE message, with an Undo button', !!r.reply && /₦62,000/.test(r.reply.text) && real(r.all).length === 1 && r.reply.buttons.some((b) => b.id.startsWith('ACTUNDO:')), r.reply?.text.replace(/\n/g, ' | '));
+  const od = await owed();
+  ok('the database now has Olowoyeye ₦20,000, Femi ₦14,000, Kalu ₦28,000, with the due dates she gave', od.length === 3 && Number(od.find((d) => d.name === 'Olowoyeye')?.outstanding_debt_ngn) === 20000 && Number(od.find((d) => d.name === 'Femi')?.outstanding_debt_ngn) === 14000 && /kalu/i.test(od.find((d) => /kalu/i.test(d.name))?.name ?? '') && !!od.find((d) => d.name === 'Olowoyeye')?.debt_due_date, JSON.stringify(od));
+  ok('…and it is NOT counted as sales, income or a logged message (books and quota untouched)', (await txCount()) === tx0 && (await quotaNow()) === q0);
+
+  r = await ask('debts-again', () => button(debtOk), (v) => /expired|already handled/i.test(v.text));
+  ok('tapping Confirm a second time does NOT add the debts again', !!r.reply && (await owed()).reduce((a, d) => a + Number(d.outstanding_debt_ngn), 0) === 62000);
+
+  r = await ask('who-owes-62', () => text('who dey owe me'), (v) => /Olowoyeye/.test(v.text));
+  ok('"who dey owe me" now lists all three — the exact question that failed — with the ₦62,000 total', !!r.reply && /₦62,000/.test(r.reply.text) && /Femi/.test(r.reply.text) && /[Kk]alu/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+
+  r = await ask('how-much-femi', () => text('how much does Femi owe me'), (v) => /Femi/.test(v.text));
+  ok('"how much does Femi owe me" → ₦14,000', !!r.reply && /14,000/.test(r.reply.text), r.reply?.text);
+
+  // a customer pays one of those debts: this is a repayment, and the 🎉 moment shows it
+  r = await ask('femi-pays', () => text('Femi don pay 14k'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  ok('"Femi don pay 14k" → logged as a debt payment (not a sale)', !!r.reply && /[Dd]ebt/.test(r.reply.text) && !/Sale|Sold/.test(r.reply.text.split('\n')[0] ?? ''), r.reply?.text.replace(/\n/g, ' | '));
+  const femiId = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id ?? '';
+  r = await ask('femi-confirm', () => button(femiId), (v) => /Saved/.test(v.text));
+  ok('confirmed: 🎉 ₦14,000 collected, and Femi is cleared (the other two still owe ₦48,000)', !!r.reply && /🎉 ₦14,000 collected/.test(r.reply.text) && (await owed()).reduce((a, d) => a + Number(d.outstanding_debt_ngn), 0) === 48000, r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
+
+  // money received for GOODS is a sale, even when worded "collected from"
+  r = await ask('collect-sale', () => text('collected 12k from Chika for the gele'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  ok('"collected 12k from Chika for the gele" → a SALE (not an old-debt payment that would vanish from sales)', !!r.reply && /Gele/i.test(r.reply.text) && !/[Dd]ebt repayment/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+  const chikaTxc = r.reply?.buttons.find((b) => b.id.startsWith('TXX:'))?.id; if (chikaTxc) await ask('collect-discard', () => button(chikaTxc), (v) => v.text.length > 0);
+
+  // opening stock + price change: not a purchase, not a sale
+  const exp0 = (await rows(`transactions?business_id=eq.${biz!.id}&select=id&tx_type=eq.restock&status=eq.confirmed`)).length;
+  r = await ask('opening-stock', () => text('I have 50 pieces of lace in stock, I bought them at 15k each, I sell 20k'), (v) => v.buttons.some((b) => b.id.startsWith('ACTOK:')));
+  ok('"I have 50 lace…" → a stock preview (stock 50, cost ₦15,000, price ₦20,000), NOT a ₦750,000 purchase', !!r.reply && /50/.test(r.reply.text) && /15,000/.test(r.reply.text) && /20,000/.test(r.reply.text) && !/750,000/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+  const stockOk = r.reply?.buttons.find((b) => b.id.startsWith('ACTOK:'))?.id ?? '';
+  r = await ask('opening-stock-ok', () => button(stockOk), (v) => /Updated 1 product/.test(v.text));
+  const lace = (await rows(`products?business_id=eq.${biz!.id}&select=name,stock_qty,cost_price_ngn,selling_price_ngn&name_key=eq.lace`))[0];
+  ok('database: Lace stock 50, cost ₦15,000, price ₦20,000 — and no restock/expense was created', Number(lace?.stock_qty) === 50 && Number(lace?.cost_price_ngn) === 15000 && Number(lace?.selling_price_ngn) === 20000 && (await rows(`transactions?business_id=eq.${biz!.id}&select=id&tx_type=eq.restock&status=eq.confirmed`)).length === exp0, JSON.stringify(lace));
+
+  r = await ask('price-change', () => text('update price of lace to 22k'), (v) => v.buttons.some((b) => b.id.startsWith('ACTOK:')));
+  ok('"update price of lace to 22k" → asks to confirm (old ₦20,000 → new ₦22,000) instead of falsely saying "noted"', !!r.reply && /20,000/.test(r.reply.text) && /22,000/.test(r.reply.text) && !/\bnoted\b/i.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+  const cancelId = r.reply?.buttons.find((b) => b.id.startsWith('ACTNO:'))?.id ?? '';
+  await ask('price-cancel', () => button(cancelId), (v) => /Cancelled/.test(v.text));
+  ok('Cancel leaves the price at ₦20,000', Number((await rows(`products?business_id=eq.${biz!.id}&select=selling_price_ngn&name_key=eq.lace`))[0]?.selling_price_ngn) === 20000);
+
+  r = await ask('cust-phone', () => text("Olowoyeye's number is 08031234567"), (v) => /Saved/.test(v.text));
+  ok('customer phone saved in international format', !!r.reply && /2348031234567/.test(r.reply.text) && (await rows(`customers?business_id=eq.${biz!.id}&select=phone_number&name=eq.Olowoyeye`))[0]?.phone_number === '2348031234567', r.reply?.text.replace(/\n/g, ' | '));
+
+  r = await ask('owe-supplier', () => text('I owe Mama Ade 30k for fabric'), (v) => /don't track|can't do that/i.test(v.text), 40_000);
+  ok('"I owe Mama Ade 30k" → honest "I don\'t track money you owe suppliers yet" (not silently logged as something else)', !!r.reply && /don't track money \*?you\*? owe|don't track money you owe/i.test(r.reply.text) && r.reply.buttons.length === 0, r.reply?.text.replace(/\n/g, ' | '));
+  r = await ask('thanks', () => text('thank you'), (v) => /Anytime|welcome/i.test(v.text), 40_000);
+  ok('"thank you" → a short friendly line (not "I only help with…")', !!r.reply && !/only help/i.test(r.reply.text) && r.reply.text.length < 120, r.reply?.text);
+
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));
   ok('no secrets appear in any outbound message', !/sb_secret_|EAAf|AQ\.Ab8|ea5d2437/.test(everything));

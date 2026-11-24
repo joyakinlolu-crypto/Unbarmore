@@ -5,7 +5,7 @@ import { env } from '../config/env.js';
 import { ADVICE_PER_DAY, PLANS, PRICES_NGN, TRIAL_DAYS } from '../config/plans.js';
 import {
   addStaff, claimMessageId, findBusinessByReferralCode, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
-  resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, createBusiness,
+  resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, createBusiness, debtors,
   type Actor, type Session,
 } from '../db/supabase.js';
 import { imageBatchQueue, QUEUE, redisConnection } from '../lib/queues.js';
@@ -28,6 +28,9 @@ import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { closeShopReply } from '../flows/close.js';
 import { customerReceiptReply, latestReceiptBatch } from '../flows/receipts.js';
+import {
+  ACKNOWLEDGE_REPLY, cancelAction, confirmAction, CORRECT_LAST_REPLY, notSupportedReply, owingContext, proposeDebts, proposeProducts, saveCustomerPhone, undoAction,
+} from '../flows/records.js';
 import { adminStatsReply, isAdmin, supportReply } from '../flows/platform.js';
 
 export interface InboundJob { msg: WaInboundMessage; profileName: string | null }
@@ -448,6 +451,9 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       return reply(actor.phone).text('✏️ Send the correct version (text or voice note) and I\'ll replace it.');
     case 'TXX': return discardPending(actor, a!);
     case 'TXU': return undoAndRespond(actor, a!);
+    case 'ACTOK': return confirmAction(actor, redis, a!);
+    case 'ACTNO': return cancelAction(actor, redis, a!);
+    case 'ACTUNDO': return undoAction(actor, redis, a!);
     case 'RCPT': return customerReceiptReply(actor, a!);
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
@@ -503,7 +509,10 @@ async function runBrain(
 
   const brain: BrainResult = await routeMessage({
     ...input, text,
-    business: { name: actor.business.name, recentProducts: await recentProductNames(actor.business.id), todayWat: watDateKey() },
+    business: {
+      name: actor.business.name, recentProducts: await recentProductNames(actor.business.id), todayWat: watDateKey(),
+      owing: owingContext(await debtors(actor.business.id, 30).catch(() => [])),
+    },
   });
   const source = input.audio ? 'whatsapp_voice' : input.image ? 'whatsapp_image'
     : /\b(credit|cr|acct|amt|ngn)\b.*\d/i.test(text ?? '') ? 'sms_forward' : 'whatsapp_text';
@@ -520,6 +529,14 @@ async function runBrain(
         prefix: brain.transcript ? `🎙️ _"${brain.transcript.slice(0, 200)}"_\n` : undefined,
       });
     }
+    case 'RECORD_DEBTS': return proposeDebts(actor, redis, brain.debts);
+    case 'SET_PRODUCTS': return proposeProducts(actor, redis, brain.products);
+    case 'UPDATE_CUSTOMER': return saveCustomerPhone(actor, brain.customer_update?.name ?? '', brain.customer_update?.phone ?? '');
+    case 'CHASE_DEBTS': return chaseDebtsReply(actor);
+    case 'UNDO_LAST': return undoAndRespond(actor, await latestUndoableBatch(actor.business.id, actor.user.id));
+    case 'CORRECT_LAST': return reply(actor.phone).text(CORRECT_LAST_REPLY);
+    case 'NOT_SUPPORTED': return notSupportedReply(actor.phone, brain.not_supported);
+    case 'ACKNOWLEDGE': return reply(actor.phone).text(ACKNOWLEDGE_REPLY);
     case 'VERIFY_BANK_ALERT': {
       if (!input.image) return reply(actor.phone).text('Send the transfer screenshot and I\'ll check it.');
       if (!(await consumeQuota(actor.business, 'ocr_scans_used_this_month'))) return quotaReply(actor, 'ocr_scans_used_this_month');

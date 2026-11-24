@@ -2,7 +2,7 @@
  * Every number a user sees is computed here from PostgreSQL. The LLM only chooses WHICH query.
  */
 import {
-  debtors, deadStock, expensesByCategory, ledgerSummary, lowStock, topProducts, type Business,
+  db, debtors, deadStock, expensesByCategory, ledgerSummary, lowStock, topProducts, type Business,
 } from '../db/supabase.js';
 import { ngn, watDayStart } from '../lib/money.js';
 
@@ -43,7 +43,7 @@ export async function todayLine(businessId: string): Promise<string> {
 
 export async function answerQuery(
   b: Business,
-  q: { kind: string; period?: Period; product_name?: string },
+  q: { kind: string; period?: Period; product_name?: string; customer_name?: string },
 ): Promise<string> {
   const period = q.period ?? (q.kind === 'cash_today' ? 'today' : 'this_week');
   const { from, to, label } = periodRange(period);
@@ -63,12 +63,19 @@ export async function answerQuery(
       ].join('\n');
     }
     case 'debtors': {
+      if (q.customer_name) {
+        const { data } = await db.from('customers').select('name, outstanding_debt_ngn, debt_since').eq('business_id', b.id).ilike('name', `%${q.customer_name.trim().replace(/[%_]/g, '')}%`).limit(5);
+        if (!data?.length) return `I have no customer called "${q.customer_name}" yet.`;
+        return data.map((c) => Number(c.outstanding_debt_ngn) > 0
+          ? `${c.name} owes you ${ngn(Number(c.outstanding_debt_ngn))}${c.debt_since && daysSince(c.debt_since as string) >= 1 ? ` (${daysSince(c.debt_since as string)} days)` : ''}.`
+          : `${c.name} owes you nothing.`).join('\n');
+      }
       const list = await debtors(b.id, 15);
       if (!list.length) return '🎉 Nobody owes you money right now.';
       const total = list.reduce((s, d) => s + d.outstanding_debt_ngn, 0);
       return [
         `*Customers owing you — ${ngn(total)} total*`,
-        ...list.map((d, i) => `${i + 1}. ${d.name} — ${ngn(d.outstanding_debt_ngn)}${d.debt_since ? ` (${daysSince(d.debt_since)}d)` : ''}`),
+        ...list.map((d, i) => `${i + 1}. ${d.name} — ${ngn(d.outstanding_debt_ngn)}${d.debt_since && daysSince(d.debt_since) >= 1 ? ` (${daysSince(d.debt_since)}d)` : ''}`),
         '',
         'Reply *CHASE* for ready-to-forward reminder messages.',
       ].join('\n');
@@ -77,6 +84,17 @@ export async function answerQuery(
       const list = await topProducts(b.id, from, to, 5);
       if (!list.length) return `No sales recorded ${label}.`;
       return [`*Best sellers ${label}*`, ...list.map((p, i) => `${i + 1}. ${p.name} — ${p.qty} sold · ${ngn(p.revenue)}`)].join('\n');
+    }
+    case 'top_customers': {
+      const { data } = await db.from('transactions').select('total_amount_ngn, customers(name)').eq('business_id', b.id).eq('tx_type', 'sale').eq('status', 'confirmed')
+        .not('customer_id', 'is', null).gte('transaction_date', from.toISOString()).lt('transaction_date', to.toISOString()).limit(5000);
+      const sums = new Map<string, number>();
+      for (const r of (data ?? []) as unknown as { total_amount_ngn: string; customers: { name: string } | null }[]) {
+        if (r.customers?.name) sums.set(r.customers.name, (sums.get(r.customers.name) ?? 0) + Number(r.total_amount_ngn));
+      }
+      const top = [...sums].sort((x, y) => y[1] - x[1]).slice(0, 5);
+      if (!top.length) return `No sales with a customer name ${label} yet. Name the buyer when you log a sale, like "sold 2 lace 50k to Mama Tunde".`;
+      return [`*Best customers ${label}*`, ...top.map(([n, v], i) => `${i + 1}. ${n} — ${ngn(v)}`)].join('\n');
     }
     case 'dead_stock': {
       const list = await deadStock(b.id);

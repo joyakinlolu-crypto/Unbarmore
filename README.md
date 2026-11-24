@@ -118,3 +118,9 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - **Trial = 14 days** (`TRIAL_DAYS` in `src/config/plans.ts`; set in code when a business is created, so no SQL change). Trial gets **5 short videos**.
 - **Short "mini" videos** (`videoLength: 'mini'`) on the trial and free plans: ≤3 photos (fewer image-model calls, the biggest cost), a ~13-word script, ~9–11 s render, with a "Starter makes full HD ads" note. Paid plans keep the full 15–18 s ad. Tune in `PLANS` / `MINI_VIDEO`.
 - **Voiceover fix**: the speech model now receives only the words to speak. Before, an instruction sentence was read aloud ahead of every ad (and long scripts were cut off at the end). If a voice ever overruns, it is sped up (max 1.25×) rather than clipped.
+
+## What the bot understands (and the audit that proves it)
+- **Intents**: log sale/expense/restock/debt payment · **record debts that already existed** (a typed or spoken list of names and amounts, confirmed before saving, with Undo) · **opening stock and price/cost changes** (same Confirm/Undo, never counted as a sale or purchase) · save a customer's phone · questions about their numbers (profit, who owes, one customer's debt, best customers, stock) · chase debtors · undo/correct the last entry · business advice · sales replies · videos.
+- **Honest "not yet"**: money *you* owe suppliers, cash/bank balance, personal spending, invoices and broadcasts get a plain "I haven't recorded this" and a pointer, never a false "noted". The AI is forbidden from claiming any action in free text; only the system acts.
+- **Sale vs old-debt payment** is decided with the list of who currently owes (given to the AI), so "collected 12k from Chika for the gele" is a sale and "Femi don pay 14k" clears Femi's debt.
+- Run `npx tsx scripts/live-router-audit.mts` before every release: 51 realistic messages in English, Pidgin, Yoruba, Hausa and Igbo (uses the real Gemini API).

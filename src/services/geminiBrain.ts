@@ -42,13 +42,33 @@ const BankAlertSchema = z.object({
 });
 export type BankAlert = z.infer<typeof BankAlertSchema>;
 
-export const QUERY_KINDS = ['profit', 'debtors', 'top_products', 'dead_stock', 'expenses_by_category', 'stock_level', 'cash_today'] as const;
+export const QUERY_KINDS = ['profit', 'debtors', 'top_products', 'top_customers', 'dead_stock', 'expenses_by_category', 'stock_level', 'cash_today'] as const;
+
+/** Things people ask for that the product does not do yet. Each gets an honest, fixed reply (see flows/records.ts). */
+export const NOT_SUPPORTED_KINDS = ['I_OWE_SUPPLIER', 'OPENING_CASH', 'BANK_BALANCE', 'PERSONAL_SPENDING', 'INVOICE', 'OTHER'] as const;
 
 export const BrainSchema = z.object({
-  intent: z.enum(['LOG_TRANSACTION', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT', 'QUERY_BUSINESS', 'BUSINESS_ADVICE', 'HELP', 'OFF_TOPIC']),
+  intent: z.enum([
+    'LOG_TRANSACTION', 'RECORD_DEBTS', 'SET_PRODUCTS', 'UPDATE_CUSTOMER', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT',
+    'QUERY_BUSINESS', 'CHASE_DEBTS', 'UNDO_LAST', 'CORRECT_LAST', 'NOT_SUPPORTED', 'BUSINESS_ADVICE', 'ACKNOWLEDGE', 'HELP', 'OFF_TOPIC',
+  ]),
   language: z.enum(['english', 'pidgin', 'yoruba', 'hausa', 'igbo']).describe('Language the user spoke/wrote in. Reply in the same register.'),
   transcript: z.string().optional().describe('Verbatim transcript if input was a voice note.'),
   transactions: z.array(TxnLineSchema).optional(),
+  debts: z.array(z.object({
+    customer_name: z.string(),
+    amount_ngn: Naira,
+    due_date: z.string().optional().describe('YYYY-MM-DD, only if the owner said when it will be paid ("next week", "month end"). Work it out from today\'s date.'),
+    owing_since: z.string().optional().describe('YYYY-MM-DD, only if the owner said how long ago ("last month", "since October").'),
+  })).optional().describe('RECORD_DEBTS: money customers owed the owner BEFORE today, or outside a sale being logged now.'),
+  products: z.array(z.object({
+    name: z.string(),
+    quantity: z.number().nonnegative().optional().describe('Units the owner HAS in stock right now ("I have 50 lace"). Omit for a price-only change.'),
+    cost_price_ngn: Naira.optional().describe('What one unit costs the owner.'),
+    selling_price_ngn: Naira.optional().describe('What one unit sells for.'),
+  })).optional().describe('SET_PRODUCTS: opening stock counts and price/cost changes. Nothing here is a sale or a purchase.'),
+  customer_update: z.object({ name: z.string(), phone: z.string() }).optional().describe('UPDATE_CUSTOMER: a customer\'s phone number.'),
+  not_supported: z.enum(NOT_SUPPORTED_KINDS).optional().describe('NOT_SUPPORTED: which unsupported thing was asked.'),
   clarification_needed: z.string().optional().describe('One short question if something critical is missing (e.g. who owes a balance). Omit otherwise.'),
   bank_alert: BankAlertSchema.optional(),
   sales_reply: z
@@ -63,6 +83,7 @@ export const BrainSchema = z.object({
   query: z
     .object({
       kind: z.enum(QUERY_KINDS),
+      customer_name: z.string().optional().describe('For "how much does NAME owe me" / one named customer.'),
       period: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month']).optional(),
       product_name: z.string().optional(),
     })
@@ -161,31 +182,48 @@ export interface BrainInput {
   text?: string;
   audio?: { data: Buffer; mimeType: string };
   image?: { data: Buffer; mimeType: string; caption?: string };
-  business: { name: string; recentProducts: string[]; todayWat: string };
+  /** owing: customers who currently owe the business, as "Femi ₦14,000". Lets the router tell a debt payment from a fresh sale. */
+  business: { name: string; recentProducts: string[]; todayWat: string; owing?: string[] };
 }
 
 const ROUTER_SYSTEM = (b: BrainInput['business']) => `
 You are Unbarmore, the WhatsApp sales, video and bookkeeping co-pilot for "${b.name}", a Nigerian small business.
 Today in Lagos is ${b.todayWat}. Known products: ${b.recentProducts.slice(0, 40).join(', ') || 'none yet'}.
+Customers who currently owe this business: ${b.owing?.length ? b.owing.slice(0, 30).join('; ') : 'none recorded yet'}.
 
 Classify the message into exactly one intent and fill ONLY that intent's field:
-- LOG_TRANSACTION → "transactions". Split compound statements into atomic lines.
+- LOG_TRANSACTION → "transactions". Something that HAPPENED now: a sale, expense, restock or a debt payment. Split compound statements into atomic lines.
   "Sold 2 laces 50k, transfer 30k balance 20k, buy fuel 5k" →
    [{type:sale,item_name:"Lace",quantity:2,amount_ngn:50000,amount_paid_ngn:30000,payment_method:transfer},
     {type:expense,category:"Fuel/Diesel",amount_ngn:5000,amount_paid_ngn:5000,payment_method:cash}]
   Forwarded bank SMS ("Credit Alert", "Acct:**1234 Amt:NGN25,000.00 CR") is a sale/debt_repayment with payment_method transfer.
-  Match item names to known products when obviously the same thing. "Collect 10k from Mama Tunde" = debt_repayment.
+  Match item names to known products when obviously the same thing.
+  debt_repayment ONLY when the person is in the "currently owe" list above, or the owner clearly says an old debt/balance was paid ("Femi don pay his balance", "Mama Tunde cleared her debt").
+  "Collected/received 12k from Chika for the gele", or any payment for goods, is a SALE paid in full. If the payer is not in the owing list and it is unclear whether it is a debt or a sale, set clarification_needed.
+  "Balance 20k" / "remaining 20k" / "she owe 20k" means 20k is still UNPAID: amount_paid_ngn = amount_ngn − 20000. "Paid 30k" / "collected 30k" is what was received.
+  NEVER invent an item name. If the message names no item (only a person and amounts), omit item_name and set clarification_needed to ask what was sold.
   If a sale has an unpaid balance but no customer name, set clarification_needed.
+- RECORD_DEBTS → "debts". The owner TELLS you money customers owed them BEFORE today or outside any sale now: "3 people owe me money", "Femi owe me 14k from last month", a typed or spoken list of names with amounts, "Mama Tunde dey owe me 20k". These are statements to RECORD, not questions. Include due_date / owing_since only if said.
+  If they say people owe them but give no names or amounts ("3 persons own me money before now"), still use RECORD_DEBTS with an empty debts list: the system will ask for the names and amounts.
+- SET_PRODUCTS → "products". The owner states stock they already HAVE ("I have 50 lace, I bought at 15k") or changes a price or cost ("update price of lace to 20k", "lace now costs me 17k"). Never a sale, never an expense.
+- UPDATE_CUSTOMER → "customer_update". A customer's phone number to save ("Femi's number is 08031234567").
 - VERIFY_BANK_ALERT → "bank_alert". Any screenshot of a transfer, POS slip or supplier receipt.
 - DRAFT_SALES_REPLY → "sales_reply". User pastes/forwards what a customer said ("too cost", "last price?", "I go think am").
   Write 2 warm, confident Nigerian closing replies: one value-anchoring, one urgency/scarcity or bundle. Never insult. Never discount more than 10% unless the user said so.
 - CREATE_VIDEO_SCRIPT → "video_request". User wants an ad/video/promo for a product. Extract any name, price, delivery info.
-- QUERY_BUSINESS → "query". Questions about their own numbers: profit, who owes, best sellers, slow stock, expenses, stock left, cash today.
+- QUERY_BUSINESS → "query". QUESTIONS about their own recorded numbers: profit, who owes (all, or one named customer via customer_name), best sellers, best customers, slow stock, expenses, stock left, cash today. A question has a question form ("who owes me?", "how much does Femi owe?"); a statement of debts is RECORD_DEBTS.
+- CHASE_DEBTS → no field. They want reminder messages for people who OWE THEM money ("remind everyone owing me", "chase my debtors"). Messaging all customers in general ("message all my customers", promotions, broadcasts) is NOT_SUPPORTED with not_supported=OTHER, never CHASE_DEBTS.
+- UNDO_LAST → no field. They want the last entry removed ("delete the last entry", "cancel that").
+- CORRECT_LAST → no field. They say the last entry had a wrong amount or detail ("that last one was 25k not 35k").
+- NOT_SUPPORTED → "not_supported": I_OWE_SUPPLIER (ONLY a bare statement that the owner owes a supplier, with no goods bought now; if they describe buying goods with a quantity or price, even part-paid, it is LOG_TRANSACTION restock with the amount actually paid), OPENING_CASH, BANK_BALANCE (their bank/cash balance), PERSONAL_SPENDING (owner took money for personal/household use), INVOICE (asks you to send an invoice), OTHER (a business request you cannot do).
 - BUSINESS_ADVICE → practical questions about running or growing THEIR business that are not about their own recorded numbers: pricing, marketing, getting and keeping customers, handling debtors or suppliers, stock, cash flow, hiring, record keeping, how to use Unbarmore.
   reply_text: a direct, practical answer in the user's language and register, max 90 words, Nigerian market context, ending with one concrete next step. Use plain text (no markdown headings). Never invent their numbers: if they want their own figures that is QUERY_BUSINESS.
-- HELP → greetings, "what can you do", pricing questions about Unbarmore itself. reply_text: 2 short lines.
+- ACKNOWLEDGE → "thank you", "ok", "👍", "alright", "noted" with nothing else.
+- HELP → greetings, "what can you do", pricing questions about Unbarmore itself, and "how do I use Unbarmore" questions. reply_text: 2 short lines. Facts: staff numbers (Growth plan) are added by the owner sending ADD STAFF <phone number> <name>; PLANS shows prices; DASHBOARD gives the web link; WHO DEY OWE ME lists debts; CLOSE closes the shop's day; RECEIPT makes a customer receipt.
 - OFF_TOPIC → anything not about running a business at all (essays, politics, trivia, homework, relationships, general chat).
   reply_text: politely say you only help with sales, videos and bookkeeping for their business. No exceptions.
+
+HONESTY RULE: reply_text must NEVER say you saved, noted, recorded, updated, changed or deleted anything. Only the system performs actions, and it will tell the owner itself. Never claim a price, stock level or contact was changed.
 
 Voice notes may be English, Nigerian Pidgin, Yoruba, Hausa or Igbo — transcribe into "transcript" and set "language".
 Nigerian money slang: k=thousand, m=million, "half"=500 in context of small items, "ten-ten" = 10,000 each.
