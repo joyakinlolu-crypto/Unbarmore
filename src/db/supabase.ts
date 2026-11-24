@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { env } from '../config/env.js';
-import { PLANS, type Metric, type Tier } from '../config/plans.js';
+import { PLANS, TRIAL_DAYS, type Metric, type Tier } from '../config/plans.js';
 import { randomCode } from '../lib/money.js';
 
 export const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -128,7 +128,8 @@ export async function findBusinessByReferralCode(code: string): Promise<Business
 
 /** Step 1 of onboarding: the business only exists once it has a name (name is NOT NULL). */
 export async function createBusiness(phone: string, name: string, ownerName: string | null): Promise<Business> {
-  const biz = must<Business>(await db.from('businesses').insert({ owner_phone: phone, name }).select('*').single(), 'createBusiness');
+  const trialEnds = new Date(Date.now() + TRIAL_DAYS * 86_400_000).toISOString(); // overrides the column's 7-day default
+  const biz = must<Business>(await db.from('businesses').insert({ owner_phone: phone, name, trial_ends_at: trialEnds }).select('*').single(), 'createBusiness');
   must(await db.from('business_users').insert({
     business_id: biz.id, phone_number: phone, full_name: ownerName ?? 'Owner', role: 'owner',
   }), 'createOwnerUser');

@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 import { env } from '../config/env.js';
-import { PLANS } from '../config/plans.js';
+import { PLANS, TRIAL_DAYS } from '../config/plans.js';
 import { claimOutbound, consumeQuota, db, isInServiceWindow, ledgerSummary, type Business } from '../db/supabase.js';
 import { cronQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey, watWeekKey } from '../lib/money.js';
@@ -35,7 +35,7 @@ async function hourly(): Promise<void> {
     if (await isInServiceWindow(b.owner_phone as string)) {
       await reply(b.owner_phone as string)
         .text(
-          '⏰ Your 7-day trial has ended — but you are *not* locked out.',
+          `⏰ Your ${TRIAL_DAYS}-day trial has ended — but you are *not* locked out.`,
           'You keep: 1 video/month · 20 text/SMS messages · 3 PDF receipts.',
           'Starter (₦5k/mo) unlocks voice notes, fake-alert checks, 15 videos and the Sunday CEO report.',
         )

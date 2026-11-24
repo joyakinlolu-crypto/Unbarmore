@@ -10,6 +10,8 @@ export interface PlanCaps {
   ceo_reports_used_this_month: number;
   voiceNotes: boolean;
   watermark: 'full' | 'subtle' | 'none';
+  /** 'mini' = ~10-second preview video (cheaper to make); 'full' = the 15–18 second HD ad. */
+  videoLength: 'mini' | 'full';
   themes: boolean;
   dailyCheckin: boolean;
   inflationShield: boolean;
@@ -20,26 +22,32 @@ export interface PlanCaps {
 
 export const PLANS: Record<Tier, PlanCaps> = {
   trial: {
-    videos_used_this_month: 2, tx_logged_this_month: 20, ocr_scans_used_this_month: 10, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: 1,
-    voiceNotes: true, watermark: 'full', themes: true, dailyCheckin: true, inflationShield: true,
+    videos_used_this_month: 5, tx_logged_this_month: 20, ocr_scans_used_this_month: 10, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: 1,
+    voiceNotes: true, watermark: 'full', videoLength: 'mini', themes: true, dailyCheckin: true, inflationShield: true,
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
   free_limited: {
     videos_used_this_month: 1, tx_logged_this_month: 20, ocr_scans_used_this_month: 0, pdf_receipts_used_this_month: 3, ceo_reports_used_this_month: 0,
-    voiceNotes: false, watermark: 'full', themes: false, dailyCheckin: true, inflationShield: false,
+    voiceNotes: false, watermark: 'full', videoLength: 'mini', themes: false, dailyCheckin: true, inflationShield: false,
     outboundCeoTemplate: false, maxStaff: 0, sheetsSync: false,
   },
   starter_5k: {
     videos_used_this_month: 15, tx_logged_this_month: 250, ocr_scans_used_this_month: 150, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
-    voiceNotes: true, watermark: 'subtle', themes: true, dailyCheckin: true, inflationShield: true,
+    voiceNotes: true, watermark: 'subtle', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true,
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
   growth_15k: {
     videos_used_this_month: 50, tx_logged_this_month: -1, ocr_scans_used_this_month: 500, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
-    voiceNotes: true, watermark: 'none', themes: true, dailyCheckin: true, inflationShield: true,
+    voiceNotes: true, watermark: 'none', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true,
     outboundCeoTemplate: true, maxStaff: 10, sheetsSync: true,
   },
 };
+
+/** Free trial length. Applied when a business is created (the SQL column default of 7 days is overridden in code). */
+export const TRIAL_DAYS = 14;
+
+/** Mini preview video: ~10 s, at most 3 photos, ~13-word script. Fewer image-model calls + a shorter voiceover + a faster render = a fraction of the cost. */
+export const MINI_VIDEO = { maxPhotos: 3, minSeconds: 8, maxSeconds: 12, words: '12–15' } as const;
 
 export const PRICES_NGN = {
   starter_5k: { monthly: 5_000, annual: 50_000 },

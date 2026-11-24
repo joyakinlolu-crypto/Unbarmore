@@ -79,6 +79,7 @@ const APOLOGY = /couldn.t process that|couldn.t read those photos/i;
 // ───────────────────────── the real bot ─────────────────────────
 const logFile = path.join(os.tmpdir(), `bot-${Date.now()}.log`);
 const bot: ChildProcess = spawn('npx', ['tsx', 'src/server.ts'], {
+  detached: true, // own process group, so the whole tree (npx → tsx → node) can be stopped; a stale bot on the test port serves old code
   env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1', ADMIN_PHONE: PH, SUPPORT_WHATSAPP_URL: 'https://wa.me/2348100000002', INTERIM_NOTICE_MS: '1000' },
   stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')],
 });
@@ -154,8 +155,10 @@ try {
 
   r = await ask('name', () => text('Ada Fabrics'), (v) => /Ada Fabrics/.test(v.text) && v.buttons.some((b) => b.id === 'ONB_SKIP'));
   ok('business name → "set up" + a Skip button for the referral code', !!r.reply);
-  const biz = (await rows(`businesses?owner_phone=eq.${PH}&select=id,name,subscription_tier,referral_code,tx_logged_this_month`))[0];
-  ok('business created on the 7-day trial with a UNBAR-XXXX code', biz?.name === 'Ada Fabrics' && biz?.subscription_tier === 'trial' && /^UNBAR-/.test(biz?.referral_code), biz?.referral_code);
+  const biz = (await rows(`businesses?owner_phone=eq.${PH}&select=id,name,subscription_tier,referral_code,tx_logged_this_month,trial_ends_at`))[0];
+  ok('business created on the trial with a UNBAR-XXXX code', biz?.name === 'Ada Fabrics' && biz?.subscription_tier === 'trial' && /^UNBAR-/.test(biz?.referral_code), biz?.referral_code);
+  const trialDays = (new Date(biz?.trial_ends_at).getTime() - Date.now()) / 864e5;
+  ok('the trial runs 14 days (not the old 7)', trialDays > 13.9 && trialDays <= 14.01, `${trialDays.toFixed(2)} days left`);
 
   r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text));
   ok('tap Skip → welcome with examples and the referral code', !!r.reply && /UNBAR-/.test(r.reply.text));
@@ -388,13 +391,29 @@ try {
     const vs = probe.streams.find((s: any) => s.codec_type === 'video'), as = probe.streams.find((s: any) => s.codec_type === 'audio');
     ok('video file: 1080×1920 H.264, under 3.5MB', vs?.codec_name === 'h264' && vs.width === 1080 && vs.height === 1920 && buf.length < 3.5 * 1048576, `${vs?.width}×${vs?.height} ${vs?.codec_name} ${(buf.length / 1048576).toFixed(2)}MB`);
     ok('video has a Nigerian voiceover audio track (Gemini speech)', !!as, as ? `${as.codec_name}, ${Number(probe.format.duration).toFixed(1)}s` : 'NO AUDIO');
-    ok('video length is 15–20 seconds', Number(probe.format.duration) >= 14.5 && Number(probe.format.duration) <= 20.5, `${Number(probe.format.duration).toFixed(1)}s`);
+    ok('trial video is a short ~10-second preview (8–12 s), not the full 15–18 s ad', Number(probe.format.duration) >= 7.9 && Number(probe.format.duration) <= 12.1, `${Number(probe.format.duration).toFixed(1)}s, ${(buf.length / 1048576).toFixed(2)}MB`);
+    ok('…and the caption tells them it is a preview (Starter = full HD)', /10-second preview/.test(videoMsg?.text ?? ''));
+    // What does the voice actually SAY? (an earlier bug made it read the prompt instructions aloud before the ad)
+    const wav = path.join(tmp, 'vo-check.wav');
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    let said = '';
+    for (let i = 0; i < 3 && !said; i++) {
+      try {
+        const tr = await ai.models.generateContent({ model: process.env.GEMINI_TEXT_MODEL ?? 'gemini-3.1-flash-lite', contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data: fs.readFileSync(wav).toString('base64') } }, { text: 'Transcribe every spoken word exactly. Output only the words.' }] }] });
+        said = (tr.text ?? '').trim();
+      } catch { await sleep(3000); }
+    }
+    console.log(`   🎙️  the voice says: "${said.replace(/\n/g, ' ')}"`);
+    ok('the voice speaks ONLY the ad: no spoken instructions ("read this advert…", "accent", "do not add anything")', said.length > 10 && !/read this|do not add|accent|market seller|energetic/i.test(said), said.slice(0, 160));
+    ok('…and the ad is not cut off: the call to action (WhatsApp / order) is still there', /whatsapp|order/i.test(said), said.slice(-80));
     fs.copyFileSync(f, path.resolve('tmp', 'flow-video.mp4'));
   }
   const vj = (await rows(`video_jobs?business_id=eq.${biz!.id}&select=status,include_watermark,cleaned_image_urls,generated_script,error_message`))[0];
   ok('video job completed; trial video carries the watermark', vj?.status === 'completed' && vj?.include_watermark === true, JSON.stringify({ status: vj?.status, err: vj?.error_message }));
   console.log(`   ℹ️  photo clean-up by the image model: ${vj?.cleaned_image_urls?.length ? 'used' : 'skipped (image quota) — original photos were used, as designed'}`);
-  ok('video quota charged once (trial: 1 of 2)', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === 1);
+  ok('video quota charged once (trial: 1 of 5)', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === 1);
 
   // ───── the "Processing your entry..." note (INTERIM_NOTICE_MS=1000 in this test) ─────
   const notices = sent.map(view).filter((v) => /Processing your entry\.\.\./.test(v.text));
@@ -416,7 +435,8 @@ try {
 } catch (e) {
   fail++; console.error('💥 unexpected error:', e);
 } finally {
-  bot.kill('SIGTERM'); fake.close(); redis.disconnect();
+  try { process.kill(-bot.pid!, 'SIGTERM'); } catch { bot.kill('SIGTERM'); }
+  fake.close(); redis.disconnect();
   await cleanup().catch((e) => console.error('cleanup error', e));
   const left = (await rows(`businesses?owner_phone=in.(${PH},${PH2})&select=id`).catch(() => [{}])) as unknown[];
   console.log(`\n🧹 cleanup: ${left.length === 0 ? 'all test data and files removed' : 'TEST DATA REMAINS'}`);

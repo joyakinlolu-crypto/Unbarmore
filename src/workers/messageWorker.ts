@@ -2,7 +2,7 @@ import { DelayedError, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
 import { env } from '../config/env.js';
-import { PLANS, PRICES_NGN } from '../config/plans.js';
+import { PLANS, PRICES_NGN, TRIAL_DAYS } from '../config/plans.js';
 import {
   addStaff, claimMessageId, findBusinessByReferralCode, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
   resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, createBusiness,
@@ -190,7 +190,7 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
     }
     await setSession(phone, 'ONBOARDING_REFERRAL', {}, biz.id);
     return reply(phone)
-      .text(`✅ *${name}* is set up. Your 7-day free trial has started.`, '', 'Did someone refer you? Type their code (e.g. UNBAR-7K2P) or tap Skip.')
+      .text(`✅ *${name}* is set up. Your ${TRIAL_DAYS}-day free trial has started.`, '', 'Did someone refer you? Type their code (e.g. UNBAR-7K2P) or tap Skip.')
       .button('ONB_SKIP', 'Skip');
   }
 
@@ -209,7 +209,7 @@ async function applyReferral(businessId: string, code: string): Promise<boolean>
 
 function welcomeDone(phone: string, name: string, myCode: string, usedCode: string | null): Reply {
   return reply(phone).text(
-    `🎉 You're in, *${name}*! Free trial: 2 videos · 20 logged messages · 10 alert checks.`,
+    `🎉 You're in, *${name}*! Free trial: ${PLANS.trial.videos_used_this_month} short videos · ${PLANS.trial.tx_logged_this_month} logged messages · ${PLANS.trial.ocr_scans_used_this_month} alert checks.`,
     usedCode ? `🎁 Referral ${usedCode} applied.` : '',
     '',
     '*Try one now:*',

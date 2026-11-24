@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { env } from '../config/env.js';
-import { PLANS } from '../config/plans.js';
+import { MINI_VIDEO, PLANS } from '../config/plans.js';
 import { db, downloadFile, getBusiness, getProduct, refundQuota, signedUrl, uploadFile } from '../db/supabase.js';
 import { QUEUE, redisConnection, type VideoJob } from '../lib/queues.js';
 import { ngn } from '../lib/money.js';
@@ -29,6 +29,8 @@ export interface RenderInput {
   orderCode: string;           // "UNB-7K2"
   watermark: 'full' | 'subtle' | 'none';
   clearance: boolean;
+  /** ~10-second preview (trial / free plan) instead of the 15–18 second HD ad. */
+  mini?: boolean;
   fontPath: string;
   outPath: string;
   workDir: string;
@@ -47,8 +49,14 @@ async function textFile(dir: string, name: string, text: string): Promise<string
 
 export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<{ bytes: number; duration: number }> {
   const voiceDur = input.voiceover ? await probeDuration(input.voiceover) : 0;
-  const endCard = input.watermark === 'full' ? 1.6 : 0;
-  const total = Math.min(20, Math.max(15, voiceDur + 1.2 + endCard));
+  const endCard = input.watermark === 'full' ? (input.mini ? 1.2 : 1.6) : 0;
+  // Speech is never cut off: if the voice would overrun the video, it is sped up (at most 1.25x) to fit.
+  const maxTotal = input.mini ? MINI_VIDEO.maxSeconds : 20;
+  const minTotal = input.mini ? MINI_VIDEO.minSeconds : 15;
+  const overhead = (input.mini ? 0.7 : 1.2) + endCard;
+  const tempo = voiceDur > 0 ? Math.min(1.25, Math.max(1, voiceDur / (maxTotal - overhead))) : 1;
+  const tempoF = tempo > 1.001 ? `atempo=${tempo.toFixed(3)},` : '';
+  const total = Math.min(maxTotal, Math.max(minTotal, voiceDur / tempo + overhead));
   const n = input.images.length;
   const seg = (total - endCard) / n;
   const segFrames = Math.ceil(seg * FPS);
@@ -125,13 +133,13 @@ export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<
   const audioIdx = n;
   let aMap: string | null = null;
   if (input.voiceover && input.bgm) {
-    filters.push(`[${audioIdx}:a]adelay=400|400,apad,atrim=duration=${total.toFixed(2)},aformat=channel_layouts=stereo,asplit=2[vo][sc]`);
+    filters.push(`[${audioIdx}:a]${tempoF}adelay=400|400,apad,atrim=duration=${total.toFixed(2)},aformat=channel_layouts=stereo,asplit=2[vo][sc]`);
     filters.push(`[${audioIdx + 1}:a]aloop=loop=-1:size=2e9,atrim=duration=${total.toFixed(2)},volume=0.55,aformat=channel_layouts=stereo,afade=t=out:st=${(total - 1.2).toFixed(2)}:d=1.2[bg]`);
     filters.push(`[bg][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=350[duck]`);
     filters.push(`[vo][duck]amix=inputs=2:duration=first:normalize=0[aout]`);
     aMap = '[aout]';
   } else if (input.voiceover) {
-    filters.push(`[${audioIdx}:a]adelay=400|400,apad,atrim=duration=${total.toFixed(2)}[aout]`);
+    filters.push(`[${audioIdx}:a]${tempoF}adelay=400|400,apad,atrim=duration=${total.toFixed(2)}[aout]`);
     aMap = '[aout]';
   } else if (input.bgm) {
     filters.push(`[${audioIdx}:a]atrim=duration=${total.toFixed(2)},afade=t=out:st=${(total - 1.2).toFixed(2)}:d=1.2[aout]`);
@@ -196,7 +204,8 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
 
   try {
     // Step 1 — studio enhancement (parallel, keep originals on failure)
-    const raw = (row.raw_image_urls as string[]).slice(0, 5);
+    const mini = plan.videoLength === 'mini';
+    const raw = (row.raw_image_urls as string[]).slice(0, mini ? MINI_VIDEO.maxPhotos : 5); // fewer photos = fewer image-model calls = cheaper
     const cleanedPaths: string[] = [];
     const localImages = await Promise.all(raw.map(async (p, i) => {
       const data = await downloadFile('raw-images', p);
@@ -215,7 +224,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     const price = Number(product.selling_price_ngn) || null;
     const script: VideoScript = await writeVideoScript({
       businessName: business.name, productName: product.name, priceNgn: price, deliveryInfo: row.delivery_info as string | null,
-      orderCode: product.sku_code, clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin',
+      orderCode: product.sku_code, clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin', mini,
     });
     let voicePath: string | null = null;
     try {
@@ -235,7 +244,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     const { bytes } = await renderVideo({
       images: localImages, voiceover: voicePath, bgm: await pickBgm(), captions: script.captions.slice(0, 3),
       priceText: price ? ngn(price) : null, orderCode: product.sku_code, watermark: row.include_watermark ? plan.watermark === 'none' ? 'subtle' : plan.watermark : 'none',
-      clearance: row.is_clearance as boolean, fontPath: path.resolve(env.FONT_PATH), outPath, workDir,
+      clearance: row.is_clearance as boolean, mini, fontPath: path.resolve(env.FONT_PATH), outPath, workDir,
     });
 
     // Step 4 — upload & deliver as ONE video message
@@ -250,6 +259,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
         '👉 Post to your Status & forward to customers.',
         `When a customer sends *${product.sku_code}*, reply _"sold 1 ${product.sku_code}"_ and I'll log it.`,
         `_(${(bytes / 1024 / 1024).toFixed(1)}MB — light on data)_`,
+        ...(mini ? ['', '🎞️ This is a ~10-second preview. Starter makes full 15–18 second HD ads.'] : []),
       )
       .send();
   } catch (err) {

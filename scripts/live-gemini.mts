@@ -67,10 +67,20 @@ try {
   const s = await B.writeVideoScript({ businessName: 'Ada Fabrics', productName: 'Ankara Gown', priceNgn: 15000, deliveryInfo: 'Lagos ₦2,000', orderCode: 'UNB-7K2' });
   const words = s.voiceover.trim().split(/\s+/).length;
   console.log(`   ↳ script [${ms(t)}]: "${s.voiceover.slice(0, 140)}…"  captions=${JSON.stringify(s.captions)}`);
-  ok('voiceover 30–55 words (15–18s)', words >= 30 && words <= 55, `${words} words`);
+  ok('voiceover 24–36 words (≈ 13–18s of speech)', words >= 24 && words <= 36, `${words} words`);
   ok('exactly 3 captions, each ≤ 28 chars', s.captions.length === 3 && s.captions.every((c) => c.length <= 28), JSON.stringify(s.captions.map((c) => c.length)));
   ok('call-to-action names the order code', /UNB-7K2/i.test(s.voiceover) || /seven|7K2/i.test(s.voiceover));
 } catch (e: any) { warn++; console.log('❌ writeVideoScript:', String(e.message).slice(0, 160)); }
+
+// 8b. Mini (trial/free) video script: short enough for ~10 seconds
+try {
+  const t = t0();
+  const s = await B.writeVideoScript({ businessName: 'Ada Fabrics', productName: 'Ankara Gown', priceNgn: 15000, deliveryInfo: 'Lagos ₦2,000', orderCode: 'UNB-7K2', mini: true });
+  const words = s.voiceover.trim().split(/\s+/).length;
+  console.log(`   ↳ mini script [${ms(t)}]: "${s.voiceover}"`);
+  ok('mini voiceover 10–18 words (≈ 6–9s of speech)', words >= 10 && words <= 18, `${words} words`);
+  ok('mini script still has 3 captions and names the order code', s.captions.length === 3 && (/UNB-7K2/i.test(s.voiceover) || /seven|7K2/i.test(s.voiceover)));
+} catch (e: any) { warn++; console.log('❌ writeVideoScript(mini):', String(e.message).slice(0, 160)); }
 
 // 9. Bank screenshot OCR on a synthetic image
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'live-'));

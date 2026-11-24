@@ -19,15 +19,18 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
   return Buffer.concat([h, pcm]);
 }
 
-async function geminiTts(text: string, pidgin: boolean): Promise<Voiceover> {
-  const style = pidgin ? 'in a warm, energetic Nigerian Pidgin voice' : 'in a warm, energetic Nigerian (Lagos) English accent';
+/**
+ * Send ONLY the words to be spoken. Gemini speech models read any instruction placed in the prompt out loud
+ * ("Read this advert in a warm, energetic voice…" was being spoken before every ad), so style comes from the voice and the text itself.
+ */
+async function geminiTts(text: string): Promise<Voiceover> {
   const models = [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL].filter((m, i, a) => m && a.indexOf(m) === i);
   let lastErr: unknown;
   for (const model of models) {
     try {
       const res = await beta.models.generateContent({
         model,
-        contents: `Read this short advert ${style}, like a confident market seller. Do not add anything:\n${text}`,
+        contents: text,
         config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } } } },
       });
       const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
@@ -41,7 +44,7 @@ async function geminiTts(text: string, pidgin: boolean): Promise<Voiceover> {
 
 /** Nigerian-accented voiceover. Default provider "gemini" needs no extra account (uses GEMINI_API_KEY). */
 export async function synthesizeVoiceover(text: string, opts: { pidgin?: boolean } = {}): Promise<Voiceover> {
-  if (env.TTS_PROVIDER === 'gemini') return geminiTts(text, !!opts.pidgin);
+  if (env.TTS_PROVIDER === 'gemini') return geminiTts(text);
   if (env.TTS_PROVIDER === 'azure') return { data: await azureTts(text), ext: 'mp3', mime: 'audio/mpeg' };
 
   gClient ??= new TextToSpeechClient();

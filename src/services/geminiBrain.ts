@@ -1,6 +1,7 @@
 import { GoogleGenAI, type Part } from '@google/genai';
 import { z } from 'zod';
 import { env } from '../config/env.js';
+import { MINI_VIDEO } from '../config/plans.js';
 
 export const genai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
@@ -70,12 +71,15 @@ export const BrainSchema = z.object({
 });
 export type BrainResult = z.infer<typeof BrainSchema>;
 
-export const VideoScriptSchema = z.object({
-  hook: z.string().describe('First 2 seconds, max 8 words, pattern-interrupt.'),
-  voiceover: z.string().describe('Full 15–18 second spoken script, 38–48 words, Nigerian direct-response tone, ends with clear call to action naming the order code.'),
+const videoScriptSchema = (mini: boolean) => z.object({
+  hook: z.string().describe(mini ? 'First 2 seconds, max 6 words, pattern-interrupt.' : 'First 2 seconds, max 8 words, pattern-interrupt.'),
+  voiceover: z.string().describe(mini
+    ? `Short 8–10 second spoken script, ${MINI_VIDEO.words} words, Nigerian direct-response tone: hook, price, call to action naming the order code.`
+    : 'Full 15–18 second spoken script, 28–32 words (the voice speaks about two words a second), Nigerian direct-response tone, ends with clear call to action naming the order code.'),
   captions: z.array(z.string()).describe('Exactly 3 burned-in caption lines, max 28 characters each, ALL CAPS punchy.'),
   pidgin: z.boolean().describe('True if voiceover is in Pidgin.'),
 });
+export const VideoScriptSchema = videoScriptSchema(false);
 export type VideoScript = z.infer<typeof VideoScriptSchema>;
 
 // ═════════════════════════ CORE CALL ═════════════════════════
@@ -217,12 +221,18 @@ export async function writeVideoScript(p: {
   orderCode: string;
   clearance?: boolean;
   pidgin?: boolean;
+  /** ~10-second preview (trial / free plan). */
+  mini?: boolean;
 }): Promise<VideoScript> {
+  const mini = !!p.mini;
   return generateStructured({
-    schema: VideoScriptSchema,
+    schema: videoScriptSchema(mini),
     temperature: 0.8,
     system:
-      'You write 15–18 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. Hook in the first 2 seconds, one concrete benefit, social proof feel, price, scarcity, then CTA: "Send [ORDER CODE] on WhatsApp to order". Natural Lagos tone. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
+      (mini
+        ? `You write 8–10 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is ${MINI_VIDEO.words} words, no more: a 2-second hook, the product and price, then CTA "Send [ORDER CODE] on WhatsApp to order". `
+        : 'You write 15–18 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is 28–32 words, no more (the voice speaks about two words a second). Hook in the first 2 seconds, one concrete benefit, social proof feel, price, scarcity, then CTA: "Send [ORDER CODE] on WhatsApp to order". ') +
+      'Natural Lagos tone. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
     parts: [{
       text: JSON.stringify({
         business: p.businessName,

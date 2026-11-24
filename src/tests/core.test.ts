@@ -10,7 +10,7 @@ vi.hoisted(() => {
   });
 });
 
-import { PLANS } from '../config/plans.js';
+import { MINI_VIDEO, PLANS, TRIAL_DAYS } from '../config/plans.js';
 import { ngn, ngnShort, watDateKey, watDayStart, watWeekKey } from '../lib/money.js';
 import { periodRange } from '../flows/insights.js';
 import { linesToDrafts, draftLine } from '../flows/ledger.js';
@@ -39,7 +39,13 @@ describe('webhook signatures', () => {
 describe('plan caps match the spec', () => {
   it('trial', () => {
     const t = PLANS.trial;
-    expect([t.videos_used_this_month, t.tx_logged_this_month, t.ocr_scans_used_this_month, t.pdf_receipts_used_this_month, t.ceo_reports_used_this_month]).toEqual([2, 20, 10, -1, 1]);
+    expect([t.videos_used_this_month, t.tx_logged_this_month, t.ocr_scans_used_this_month, t.pdf_receipts_used_this_month, t.ceo_reports_used_this_month]).toEqual([5, 20, 10, -1, 1]);   // pilot: 5 short videos over the 14-day trial (was 2 full ones)
+  });
+  it('trial lasts 14 days; short (~10 s) videos on the free tiers, full HD on paid', () => {
+    expect(TRIAL_DAYS).toBe(14);
+    expect([PLANS.trial.videoLength, PLANS.free_limited.videoLength, PLANS.starter_5k.videoLength, PLANS.growth_15k.videoLength]).toEqual(['mini', 'mini', 'full', 'full']);
+    expect(MINI_VIDEO.maxPhotos).toBeLessThan(5);                         // fewer photos → fewer image-model calls → cheaper
+    expect(MINI_VIDEO.maxSeconds).toBeLessThanOrEqual(12);
   });
   it('free_limited never gets voice, OCR or paid outbound', () => {
     const f = PLANS.free_limited;

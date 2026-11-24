@@ -113,3 +113,8 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - **Dashboard "Today" card**: money in / spent / profit, who still owes, and one-tap buttons to chase them or log a sale on WhatsApp.
 - **Receipt invite**: customer receipts on trial / free / Starter carry "Try Unbarmore free" + the owner's referral code (Growth receipts stay clean).
 - Service worker is now registered (it was built but never started before), so the offline page, fast reopen and alerts actually work.
+
+## Trial & video cost controls
+- **Trial = 14 days** (`TRIAL_DAYS` in `src/config/plans.ts`; set in code when a business is created, so no SQL change). Trial gets **5 short videos**.
+- **Short "mini" videos** (`videoLength: 'mini'`) on the trial and free plans: ≤3 photos (fewer image-model calls, the biggest cost), a ~13-word script, ~9–11 s render, with a "Starter makes full HD ads" note. Paid plans keep the full 15–18 s ad. Tune in `PLANS` / `MINI_VIDEO`.
+- **Voiceover fix**: the speech model now receives only the words to speak. Before, an instruction sentence was read aloud ahead of every ad (and long scripts were cut off at the end). If a voice ever overruns, it is sped up (max 1.25×) rather than clipped.
