@@ -10,7 +10,9 @@ export const pushEnabled = (): boolean => !!(env.VAPID_PUBLIC_KEY && env.VAPID_P
 let configured = false;
 function configure() {
   if (configured) return;
-  webpush.setVapidDetails(env.VAPID_SUBJECT ?? env.WEB_APP_URL, env.VAPID_PUBLIC_KEY!, env.VAPID_PRIVATE_KEY!);
+  // Push services require an https: or mailto: contact; never let a local/dev WEB_APP_URL (http://localhost) break sending.
+  const subject = [env.VAPID_SUBJECT, env.WEB_APP_URL].find((v) => v && /^(https:|mailto:)/.test(v)) ?? 'https://unbarmore.vercel.app';
+  webpush.setVapidDetails(subject, env.VAPID_PUBLIC_KEY!, env.VAPID_PRIVATE_KEY!);
   configured = true;
 }
 
