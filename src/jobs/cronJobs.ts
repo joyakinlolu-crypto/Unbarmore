@@ -9,7 +9,7 @@ import { businessesWithPush, pushEnabled, sendPushToBusiness } from '../services
 import { reply, sendTemplate } from '../services/whatsapp.js';
 import { buildDailyPush } from '../flows/dailyPush.js';
 import { nudgeLine } from '../flows/onboarding.js';
-import { composeMorning, gatherMorning, tomorrowLine } from '../flows/morning.js';
+import { appNudgeFor, appNudgeText, appUsage, composeMorning, gatherMorning, tomorrowLine } from '../flows/morning.js';
 import { remindersOff } from '../flows/reminders.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
@@ -121,6 +121,8 @@ async function dailyCheckin(): Promise<void> {
     }
     const tmr = await tomorrowLine(biz.id).catch(() => null); // what is due tomorrow
     if (tmr) r.text('', tmr);
+    const appNudge = appNudgeFor(biz.created_at, await appUsage(biz.id).catch(() => 'alerts' as const), 'evening');
+    if (appNudge) r.text('', appNudgeText(appNudge).replace('Tap *Open my app* below.', 'Type *DASHBOARD* to open it.'));
     const nudge = await nudgeLine(biz).catch(() => null); // new accounts: the one next thing to do
     if (nudge) r.text('', nudge);
     await r.send().catch(() => undefined);

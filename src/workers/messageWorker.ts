@@ -311,6 +311,17 @@ async function onState(actor: Actor, text: string, session: Session): Promise<Re
 
 // ═════════════════════════ COMMANDS (deterministic, no LLM cost) ═════════════════════════
 
+/** One-tap sign-in link to the web app (also behind the 📲 Open my app button on the morning note). */
+async function dashboardReply(actor: Actor): Promise<Reply> {
+  if (actor.isStaff) return reply(actor.phone).text('The dashboard shows the whole business\'s money, so it is for the owner only.');
+  const link = await createOwnerMagicLink(actor.business.id);
+  if (!link) return reply(actor.phone).text('You asked for several links just now. Please wait a few minutes and try again.');
+  return reply(actor.phone).text(
+    '📊 *Your dashboard, advisor chat and ledger:*', link, '',
+    'One tap, no password. Link works once and expires in 15 minutes. Add it to your Home Screen to open it like an app.',
+  );
+}
+
 async function onCommand(actor: Actor, raw: string, session: Session): Promise<Reply | null> {
   const t = raw.trim();
   const upper = t.toUpperCase();
@@ -318,15 +329,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
 
   if (upper === 'UNDO') return undoAndRespond(actor, await latestUndoableBatch(b.id, actor.user.id));
   if (['PLANS', 'UPGRADE', 'PAY', 'SUBSCRIBE'].includes(upper)) return plansMenu(actor);
-  if (['DASHBOARD', 'WEB', 'CHAT', 'LOGIN'].includes(upper)) {
-    if (actor.isStaff) return reply(actor.phone).text('The dashboard shows the whole business\'s money, so it is for the owner only.');
-    const link = await createOwnerMagicLink(b.id);
-    if (!link) return reply(actor.phone).text('You asked for several links just now. Please wait a few minutes and try again.');
-    return reply(actor.phone).text(
-      '📊 *Your dashboard, advisor chat and ledger:*', link, '',
-      'One tap, no password. Link works once and expires in 15 minutes. Add it to your Home Screen to open it like an app.',
-    );
-  }
+  if (['DASHBOARD', 'WEB', 'CHAT', 'LOGIN'].includes(upper)) return dashboardReply(actor);
   if (upper === 'STARTER') {
     if (!paymentsLive()) return paymentsSoonReply(actor.phone);
     const link = await createCheckoutLink(b, 'starter_5k', 'monthly').catch((e) => { if (e instanceof PaymentsNotLiveError) return null; throw e; });
@@ -523,6 +526,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, null, actor.business.id);
     case 'BTN_CHASE_DEBT': return chaseDebtsReply(actor);
     case 'WINBACK': return customerMessagesReply(actor, 'winback');
+    case 'DASHLINK': return dashboardReply(actor);
     case 'LOGHOW': return reply(actor.phone).text('📝 Send a voice note or type it, like: _sold 2 lace 50k cash_ or _paid rent 150k_. I\'ll show it back for you to confirm.');
     case 'BTN_DEADSTOCK_PROMO': return deadStockPromoReply(actor);
     case 'BTN_EXPORT_PDF': return statementReply(actor);

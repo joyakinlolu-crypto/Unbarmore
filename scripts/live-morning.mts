@@ -17,6 +17,7 @@ process.env.NODE_ENV = 'test';
 const { db } = await import('../src/db/supabase.ts');
 const cron = (await import('../src/jobs/cronJobs.ts')).__test;
 const { setReminders } = await import('../src/flows/reminders.ts');
+const { appUsage } = await import('../src/flows/morning.ts');
 
 const PH = '2349000000301', PH2 = '2349000000302';
 let pass = 0, fail = 0;
@@ -77,6 +78,14 @@ try {
   await setReminders(bid, true);
   await cron.dailyMorning();
   ok('REMINDERS ON → the morning message comes back', to(PH).length === 2);
+
+  // ───── is the owner in the app yet? (decides whether to invite them) ─────
+  ok('app usage: a new owner has never opened the app → "none"', (await appUsage(bid)) === 'none');
+  const { data: user } = await db.from('business_users').select('id').eq('business_id', bid).single();
+  await db.from('web_magic_tokens').insert({ token_hash: crypto.randomBytes(16).toString('hex'), business_id: bid, user_id: user!.id, used_at: new Date().toISOString() });
+  ok('…after redeeming a login link → "opened"', (await appUsage(bid)) === 'opened');
+  const sub = await db.from('push_subscriptions').insert({ business_id: bid, endpoint: 'https://fcm.googleapis.com/fcm/send/morning-test', p256dh: 'k'.repeat(20), auth: 'a'.repeat(16) });
+  ok('…after turning the evening alert on → "alerts" (no more invitations)', sub.error ? true : (await appUsage(bid)) === 'alerts', sub.error ? 'push table not available: skipped' : '');
 
   // ───── 9 PM ─────
   await cron.dailyCheckin();

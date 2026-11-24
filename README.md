@@ -145,3 +145,6 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - **Free by design**: sent only to owners who messaged in the last 23 hours (inside WhatsApp's free window). Every button tap counts as a message from the owner, which keeps the window open for the next note. Owners outside the window get the free app notification instead; we never send a paid template unprompted.
 - **Control**: `REMINDERS OFF` / `STOP` pauses both notes (remembered in `outbound_log`, kind `reminders_off`), `REMINDERS ON` resumes. The welcome message tells new owners the schedule and how to pause.
 - Test against the real database with a pretend WhatsApp: `set -a; . ./.env; set +a; npx tsx scripts/live-morning.mts`.
+
+## Getting owners into the app (WhatsApp + app together)
+- Morning notes on **Tue/Fri** and evening notes on **Wed/Sat** invite owners to the app until they have it (accounts under 45 days old only): first *"Also in your app: charts, who owes you, your profit. Tap Open my app"* (a **📲 Open my app** button sends a fresh one-tap login link), then, once they've opened it, *"Add to Home Screen and turn on my evening alert"*. Detected from real activity: a redeemed login link = opened; a push subscription = installed with alerts. Nothing is sent to someone who already has alerts on.

@@ -575,6 +575,8 @@ try {
   await ask('stop-undo', () => text('reminders on'), (v) => /Back on/i.test(v.text));
   r = await ask('loghow', () => button('LOGHOW'), (v) => /Send a voice note or type it/.test(v.text));
   ok('the morning note\'s [📝 Log a sale] button answers with how to log one', !!r.reply);
+  r = await ask('dashlink', () => button('DASHLINK'), (v) => /auth\/verify\?token=[a-f0-9]{64}/.test(v.text));
+  ok('the morning note\'s [📲 Open my app] button replies with a fresh one-tap login link', !!r.reply && /auth\/verify\?token=/.test(r.reply.text));
   r = await ask('winback-btn', () => button('WINBACK'), (v) => v.text.length > 10, 40_000);
   ok('the morning note\'s [👋 Win back] button works', !!r.reply && /Nobody has gone quiet|Win-back messages/.test(r.reply.text), r.reply?.text.slice(0, 80));
 

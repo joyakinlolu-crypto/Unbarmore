@@ -25,7 +25,7 @@ vi.mock('../db/supabase.js', () => ({
 vi.mock('../flows/clients.js', () => ({ clientStats: vi.fn(), lapsed: vi.fn() }));
 vi.mock('../flows/insights.js', () => ({ periodRange: () => ({ from: new Date(0), to: new Date() }) }));
 
-import { composeMorning, dueDebts, tomorrowLine, type MorningFacts } from '../flows/morning.js';
+import { appNudgeFor, appNudgeText, composeMorning, dueDebts, tomorrowLine, type MorningFacts } from '../flows/morning.js';
 import { remindersOff, setReminders } from '../flows/reminders.js';
 
 const facts = (o: Partial<MorningFacts> = {}): MorningFacts => ({
@@ -119,5 +119,40 @@ describe('pause / resume', () => {
   it('a duplicate insert (already paused) is not an error', async () => {
     rows.logError = { code: '23505' };
     await expect(setReminders('b1', false)).resolves.toBeUndefined();
+  });
+});
+
+
+describe('inviting owners into the app (until they have it)', () => {
+  const day = (ymd: string) => new Date(`${ymd}T10:00:00Z`).getTime();           // 11:00 Lagos
+  const young = new Date(day('2026-11-20')).toISOString();
+  // 2026-11-24 Tue · 25 Wed · 26 Thu · 27 Fri · 28 Sat
+
+  it('mornings on Tuesday and Friday, evenings on Wednesday and Saturday: twice a week each, never daily', () => {
+    expect([24, 25, 26, 27, 28].map((d) => appNudgeFor(young, 'none', 'morning', day(`2026-11-${d}`)) !== null)).toEqual([true, false, false, true, false]);
+    expect([24, 25, 26, 27, 28].map((d) => appNudgeFor(young, 'none', 'evening', day(`2026-11-${d}`)) !== null)).toEqual([false, true, false, false, true]);
+  });
+  it('first "open the app", then "put it on your Home Screen"; nothing once alerts are on', () => {
+    expect(appNudgeFor(young, 'none', 'morning', day('2026-11-24'))).toBe('open');
+    expect(appNudgeFor(young, 'opened', 'morning', day('2026-11-24'))).toBe('install');
+    expect(appNudgeFor(young, 'alerts', 'morning', day('2026-11-24'))).toBeNull();
+  });
+  it('stops pestering accounts older than 45 days', () => {
+    expect(appNudgeFor(new Date(day('2026-09-01')).toISOString(), 'none', 'morning', day('2026-11-24'))).toBeNull();
+  });
+  it('the morning note carries the invitation and an "Open my app" button; buttons never exceed WhatsApp\'s 3', () => {
+    const m = composeMorning(facts({ appNudge: 'open' }));
+    expect(m.lines.join('\n')).toContain('Also in your app');
+    expect(m.buttons.map((b) => b.id)).toEqual(['DASHLINK', 'LOGHOW']);
+    const busy = composeMorning(facts({ appNudge: 'install', debts: [{ name: 'A', amount: 1, late: 1, age: 1 }], quiet: [{ name: 'B', days: 40, spent: 1 }] }));
+    expect(busy.buttons).toHaveLength(3);
+    expect(busy.buttons.map((b) => b.id)).toEqual(['BTN_CHASE_DEBT', 'WINBACK', 'DASHLINK']);   // the app button wins a place over "Log a sale"
+    expect(busy.lines.join('\n')).toContain('Add to Home Screen');
+  });
+  it('no invitation text or button on other days', () => {
+    const m = composeMorning(facts({ appNudge: null }));
+    expect(m.lines.join('\n')).not.toMatch(/in your app|Home Screen|Open my app/);
+    expect(m.buttons.map((b) => b.id)).toEqual(['LOGHOW']);
+    expect(appNudgeText('open')).toContain('free');
   });
 });
