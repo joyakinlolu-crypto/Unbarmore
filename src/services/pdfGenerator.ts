@@ -23,14 +23,40 @@ function render(build: (doc: PDFKit.PDFDocument) => void, size: 'A5' | 'A4'): Pr
   });
 }
 
-function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rcNumber: string | null) {
+/** Letters for the name-as-logo monogram: "AsoEwa Fabrics" → "AF". */
+function monogram(name: string): string {
+  const words = name.replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean);
+  if (!words.length) return 'U';
+  return (words.length === 1 ? words[0]!.slice(0, 2) : words[0]![0]! + words[1]![0]!).toUpperCase();
+}
+
+/** Brand block: the owner's logo, or (no logo) a green monogram badge. Always followed by the business name. */
+function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rcNumber: string | null, logo?: Buffer | null) {
   const w = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const x = doc.page.margins.left;
-  doc.font('bold').fontSize(16).fillColor(BRAND.ink).text(businessName, x, doc.y, { width: w * 0.65 });
-  if (rcNumber) doc.font('reg').fontSize(8).fillColor(BRAND.muted).text(`RC ${rcNumber}`);
-  doc.font('bold').fontSize(11).fillColor(BRAND.green).text(title, x, doc.page.margins.top, { width: w, align: 'right' });
-  doc.moveDown(1.5);
+  const y0 = doc.page.margins.top;
+  const S = 40; // logo box
+  let drewLogo = false;
+  if (logo) {
+    try { doc.image(logo, x, y0, { fit: [S, S], valign: 'center' }); drewLogo = true; } catch { /* not a usable image: fall back to the monogram */ }
+  }
+  if (!drewLogo) {
+    doc.roundedRect(x, y0, S, S, 9).fillColor(BRAND.green).fill();
+    doc.font('bold').fontSize(16).fillColor('#FFFFFF').text(monogram(businessName), x, y0 + S / 2 - 9, { width: S, align: 'center', lineBreak: false });
+  }
+  const tx = x + S + 10;
+  // Long names shrink (15pt down to 10pt) and, if still too wide, are cut with "…" — never wrapped onto the lines below.
+  const maxW = w * 0.62 - S;
+  let size = 15; doc.font('bold');
+  while (size > 10 && doc.fontSize(size).widthOfString(businessName) > maxW) size -= 0.5;
+  let shown = businessName;
+  while (shown.length > 3 && doc.fontSize(size).widthOfString(shown) > maxW) shown = shown.slice(0, -2).trimEnd() + '…';
+  doc.fontSize(size).fillColor(BRAND.ink).text(shown, tx, y0 + (rcNumber ? 4 : 11), { lineBreak: false });
+  if (rcNumber) doc.font('reg').fontSize(8).fillColor(BRAND.muted).text(`RC ${rcNumber}`, tx, y0 + 24, { width: w * 0.5, lineBreak: false });
+  doc.font('bold').fontSize(11).fillColor(BRAND.green).text(title, x, y0, { width: w, align: 'right' });
+  doc.y = y0 + S + 12;
   doc.moveTo(x, doc.y).lineTo(x + w, doc.y).strokeColor(BRAND.line).stroke();
+  doc.x = x;
   doc.moveDown(0.8);
 }
 
@@ -69,11 +95,13 @@ export interface ReceiptInput {
   balanceAsAt?: string;
   /** Set unless the plan has no watermark. */
   promo?: Promo | null;
+  /** Owner's logo (PNG/JPEG bytes). Omitted → the business name is drawn as the logo. */
+  logo?: Buffer | null;
 }
 
 export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
   return render((doc) => {
-    header(doc, `RECEIPT\n#${r.receiptNumber}`, r.businessName, r.rcNumber);
+    header(doc, `RECEIPT\n#${r.receiptNumber}`, r.businessName, r.rcNumber, r.logo);
     const x = doc.page.margins.left;
     const w = doc.page.width - x - doc.page.margins.right;
 
@@ -139,6 +167,7 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
 // ───────────── Weekly statement (A4) ─────────────
 
 export interface StatementInput {
+  logo?: Buffer | null;
   businessName: string;
   rcNumber: string | null;
   periodLabel: string;
@@ -157,7 +186,7 @@ export interface StatementInput {
 
 export function weeklyStatementPdf(s: StatementInput): Promise<Buffer> {
   return render((doc) => {
-    header(doc, `INCOME & EXPENSE STATEMENT\n${s.periodLabel}`, s.businessName, s.rcNumber);
+    header(doc, `INCOME & EXPENSE STATEMENT\n${s.periodLabel}`, s.businessName, s.rcNumber, s.logo);
     const x = doc.page.margins.left;
     const w = doc.page.width - x - doc.page.margins.right;
 

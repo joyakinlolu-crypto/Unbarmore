@@ -6,6 +6,7 @@ import { ngn, ngnShort, watWeekKey } from '../lib/money.js';
 import { writeDebtReminders } from '../services/geminiBrain.js';
 import { weeklyStatementPdf } from '../services/pdfGenerator.js';
 import { reply, type Reply } from '../services/whatsapp.js';
+import { loadLogo } from './branding.js';
 import { moneyBack, moneyBackLine, type MoneyBack } from './moneyBack.js';
 import { daysSince, periodRange } from './insights.js';
 import { startClearanceVideo } from './video.js';
@@ -107,7 +108,7 @@ export async function statementReply(actor: Actor): Promise<Reply> {
   }
   const r = await buildWeeklyReport(actor.business);
   const pdf = await weeklyStatementPdf({
-    businessName: actor.business.name, rcNumber: actor.business.rc_number, periodLabel: r.periodLabel,
+    businessName: actor.business.name, rcNumber: actor.business.rc_number, periodLabel: r.periodLabel, logo: await loadLogo(actor.business),
     revenue: r.revenue, expenses: r.expenses, restock: r.restock, netProfit: r.netProfit, cashIn: r.cashIn,
     debtCollected: r.debtCollected, expenseByCategory: r.expenseByCategory, topProducts: r.topProducts,
     debtors: r.debtors, deadStock: r.deadStock, valueRecovered: r.valueRecovered,

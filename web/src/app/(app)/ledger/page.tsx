@@ -3,6 +3,7 @@ import { Download, FileText, MessageCircle, Search } from 'lucide-react';
 import { requireSession } from '@/lib/auth';
 import { ngn, waLink, waNumber, watDate } from '@/lib/format';
 import { db } from '@/lib/supabase';
+import { botNumber } from '@/lib/whatsapp';
 
 export const metadata = { title: 'Ledger' };
 export const dynamic = 'force-dynamic';
@@ -20,6 +21,7 @@ export default async function Ledger({ searchParams }: { searchParams: Promise<{
   const { business: b } = await requireSession();
   const sp = await searchParams;
   const debtorsTab = sp.tab === 'debtors';
+  const customersTab = sp.tab === 'customers';
   const page = Math.max(1, Number.parseInt(sp.page ?? '1', 10) || 1);
   const type = sp.type && sp.type in TYPES ? sp.type : null;
   // Allow-list: this string is interpolated into a PostgREST filter, so only letters/digits/space/.'- survive.
@@ -33,13 +35,14 @@ export default async function Ledger({ searchParams }: { searchParams: Promise<{
   return (
     <main className="space-y-3 p-3">
       <div className="flex rounded-full bg-mist p-0.5 text-sm font-medium">
-        <Link href="/ledger" className={`flex-1 rounded-full py-2 text-center ${!debtorsTab ? 'bg-white shadow-sm' : 'text-slate-500'}`}>Transactions</Link>
+        <Link href="/ledger" className={`flex-1 rounded-full py-2 text-center ${!debtorsTab && !customersTab ? 'bg-white shadow-sm' : 'text-slate-500'}`}>Transactions</Link>
         <Link href="/ledger?tab=debtors" className={`flex-1 rounded-full py-2 text-center ${debtorsTab ? 'bg-white shadow-sm' : 'text-slate-500'}`}>Who owes me</Link>
+        <Link href="/ledger?tab=customers" className={`flex-1 rounded-full py-2 text-center ${customersTab ? 'bg-white shadow-sm' : 'text-slate-500'}`}>Customers</Link>
       </div>
       <a href={`/api/export?month=${month}`} className="flex items-center justify-center gap-2 rounded-xl bg-royal py-3 text-sm font-semibold text-white">
         <FileText size={16} /> Download this month’s statement (PDF)
       </a>
-      {debtorsTab ? await Debtors(b.id, b.name) : await Transactions(b.id, { q, type, page, qs })}
+      {customersTab ? await Customers(b.id, b.name) : debtorsTab ? await Debtors(b.id, b.name) : await Transactions(b.id, { q, type, page, qs })}
     </main>
   );
 }
@@ -133,6 +136,52 @@ async function Debtors(bid: string, bizName: string) {
         })}
       </ul>
       <p className="text-center text-xs text-slate-400">Customer with no saved number? WhatsApp lets you pick the contact.</p>
+    </>
+  );
+}
+
+async function Customers(bid: string, bizName: string) {
+  const [cs, tx] = await Promise.all([
+    db.from('customers').select('id, name, phone_number, total_spent_ngn, outstanding_debt_ngn').eq('business_id', bid).order('total_spent_ngn', { ascending: false }).limit(300),
+    db.from('transactions').select('customer_id, transaction_date').eq('business_id', bid).eq('tx_type', 'sale').eq('status', 'confirmed').not('customer_id', 'is', null).order('transaction_date', { ascending: false }).limit(5000),
+  ]);
+  const last = new Map<string, string>();
+  for (const t of tx.data ?? []) if (!last.has(t.customer_id as string)) last.set(t.customer_id as string, t.transaction_date as string);
+  const list = cs.data ?? [];
+  const bot = botNumber();
+  const daysAgo = (iso?: string) => (iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000) : null);
+  const quiet = list.filter((c) => { const d = daysAgo(last.get(c.id as string)); return d !== null && d >= 30; }).length;
+
+  if (!list.length) {
+    return (
+      <div className="space-y-3 py-8 text-center">
+        <p className="text-slate-500">No customers on your list yet. Name the buyer when you log a sale, or send me a list on WhatsApp.</p>
+        <a href={waLink(bot, 'add my customers: Femi 08031234567, Kalu 08051234567')} target="_blank" rel="noopener" className="inline-block rounded-xl bg-royal px-4 py-2.5 text-sm font-semibold text-white">Add customers on WhatsApp</a>
+      </div>
+    );
+  }
+  return (
+    <>
+      <p className="text-sm text-slate-500">{list.length} customer{list.length > 1 ? 's' : ''}{quiet > 0 && <> · <b className="text-alert">{quiet} gone quiet (30+ days)</b></>}</p>
+      {quiet > 0 && <a href={waLink(bot, 'WIN BACK')} target="_blank" rel="noopener" className="flex items-center justify-center rounded-xl bg-[#25D366] py-2.5 text-sm font-semibold text-white">Get win-back messages on WhatsApp</a>}
+      <ul className="space-y-2">
+        {list.map((c) => {
+          const d = daysAgo(last.get(c.id as string));
+          const gone = d !== null && d >= 30;
+          const first = String(c.name).split(' ')[0];
+          const msg = gone ? `Hello ${first}, it's been a while! 🙏 We miss you at ${bizName}. Come see what's new, or just reply to this message.` : `Hello ${first}, thank you for shopping with ${bizName}! 🙏 We really appreciate you.`;
+          return (
+            <li key={c.id as string} className="flex items-center gap-3 rounded-2xl border border-slate-100 p-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium">{c.name as string}{gone && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">QUIET {d}d</span>}</p>
+                <p className="text-xs text-slate-500">{ngn(Number(c.total_spent_ngn))} spent · {d === null ? 'no purchase yet' : d < 1 ? 'bought today' : `last bought ${d} day${d === 1 ? '' : 's'} ago`}{Number(c.outstanding_debt_ngn) > 0 && <> · <span className="text-alert">owes {ngn(Number(c.outstanding_debt_ngn))}</span></>}</p>
+              </div>
+              <a href={waLink(waNumber(c.phone_number as string | null), msg)} target="_blank" rel="noopener" aria-label={`Message ${c.name} on WhatsApp`} className="grid h-10 w-10 place-items-center rounded-full bg-[#25D366] text-white"><MessageCircle size={18} /></a>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-center text-xs text-slate-400">The green button opens WhatsApp with a message ready. No number saved? WhatsApp lets you pick the contact.</p>
     </>
   );
 }

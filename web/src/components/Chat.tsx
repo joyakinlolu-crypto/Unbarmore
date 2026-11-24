@@ -11,9 +11,9 @@ const CHIPS = [
   'Draft a polite payment reminder for my biggest debtor',
 ];
 
-export default function Chat({ initial, tier, bot, freeLeft, freeLimit }: { initial: Msg[]; tier: string; bot: string; freeLeft: number | null; freeLimit: number }) {
+export default function Chat({ initial, tier, bot, freeLeft, freeLimit, prefill = '' }: { initial: Msg[]; tier: string; bot: string; freeLeft: number | null; freeLimit: number; prefill?: string }) {
   const [msgs, setMsgs] = useState<Msg[]>(initial);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(prefill); // a chart's "ask your advisor" link pre-fills the question; the owner presses send
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<'slow' | 'fail' | null>(null);
   const [left, setLeft] = useState(freeLeft);

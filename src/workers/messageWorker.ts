@@ -27,10 +27,13 @@ import { startVideo } from '../flows/video.js';
 import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { closeShopReply } from '../flows/close.js';
+import { AWAIT_LOGO_KEY, AWAIT_LOGO_TTL_S, logoAskReply, saveLogo, useNameAsLogo } from '../flows/branding.js';
 import { customerReceiptReply, latestReceiptBatch } from '../flows/receipts.js';
 import {
-  ACKNOWLEDGE_REPLY, cancelAction, confirmAction, CORRECT_LAST_REPLY, notSupportedReply, owingContext, proposeDebts, proposeProducts, saveCustomerPhone, undoAction,
+  ACKNOWLEDGE_REPLY, cancelAction, confirmAction, CORRECT_LAST_REPLY, notSupportedReply, owingContext, proposeClients, proposeDebts, proposeProducts, saveCustomerPhone, undoAction,
 } from '../flows/records.js';
+import { clientStats, customerMessagesReply, lapsedText, myClientsText } from '../flows/clients.js';
+import { checklistReply } from '../flows/onboarding.js';
 import { adminStatsReply, isAdmin, supportReply } from '../flows/platform.js';
 
 export interface InboundJob { msg: WaInboundMessage; profileName: string | null }
@@ -105,6 +108,17 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   let session = await getSession(phone);
 
   if (!actor) return onboarding(msg, session, profileName);
+
+  // The owner asked to set a logo and is now sending it: this photo is the logo, not a product shot.
+  const photoId = msg.type === 'image' ? msg.image?.id : msg.type === 'document' && msg.document?.mime_type?.startsWith('image/') ? msg.document.id : null;
+  if (photoId && !actor.isStaff) {
+    const waiting = await redis.getdel(AWAIT_LOGO_KEY(phone));
+    if (waiting !== null) {
+      try { await saveLogo(actor, (await downloadMedia(photoId)).data); }
+      catch { await redis.set(AWAIT_LOGO_KEY(phone), waiting, 'EX', AWAIT_LOGO_TTL_S); return reply(phone).text('I couldn\'t read that picture. Please send your logo again as a normal photo.'); }
+      return waiting !== '-' ? customerReceiptReply(actor, waiting) : reply(phone).text('✅ Logo saved. It now appears at the top of your receipts and statements.');
+    }
+  }
 
   // Images are debounced (3–5 product photos arrive as separate webhooks within milliseconds).
   if (msg.type === 'image' && msg.image) {
@@ -221,16 +235,17 @@ async function welcomeDone(phone: string, name: string, myCode: string, usedCode
     `🎉 You're in, *${name}*! Your ${TRIAL_DAYS}-day free trial has started: ${PLANS.trial.videos_used_this_month} short videos · ${PLANS.trial.tx_logged_this_month} logged messages · ${PLANS.trial.ocr_scans_used_this_month} alert checks.`,
     usedCode ? `🎁 Referral ${usedCode} applied.` : '',
     '',
-    '*Try one now:*',
-    '🎙️ Voice note: _"Sold 2 lace 50k, transfer 30k, balance 20k Mama Tunde"_',
-    '📸 Send 3–5 photos of a product → I make a sales video',
-    '🧾 Send a transfer screenshot → I check if it\'s fake',
-    '💬 Or just ask me about your business: _"How do I price my ankara gowns?"_',
+    '*Start with these 3 steps:*',
+    '1️⃣ *Tell me a sale.* Send a voice note or type: _"Sold 2 lace 50k, transfer 30k, balance 20k Mama Tunde"_',
+    '2️⃣ *Tell me who owes you.* Type: _"Femi owes me 14k, Kalu 28k"_',
+    '3️⃣ *Make a customer receipt* with the 🧾 button after a sale.',
+    '',
+    'Also: 📸 send photos for a sales video · 🧾 send a transfer screenshot and I check if it\'s fake · 💬 ask me anything about your business.',
     '',
     link ? `📲 *Your dashboard:* ${link}` : '📲 Type *DASHBOARD* any time for your charts and AI advisor.',
     link ? '_Open it, add it to your Home Screen, and tap "Turn on my evening alert". Every evening I\'ll show you what you made and who still owes you._' : '',
     '',
-    `Your referral code: *${myCode}*. Share it and you both get ₦1,000. Type HELP any time.`,
+    `Type *START* any time to see your progress. Your referral code: *${myCode}*, share it and you both get ₦1,000.`,
   );
 }
 
@@ -324,6 +339,12 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (/^who dey owe me\??$/i.test(t)) return reply(actor.phone).text(await answerQuery(b, { kind: 'debtors' }));
   const rcpt = t.match(/^receipt(?:\s+(.{2,40}))?$/i);
   if (rcpt) { const who = rcpt[1]?.trim(); return customerReceiptReply(actor, await latestReceiptBatch(actor, who), who); }
+  if (upper === 'LOGO' && !actor.isStaff) { await redis.set(AWAIT_LOGO_KEY(actor.phone), '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
+  if (['LOGO REMOVE', 'NO LOGO', 'REMOVE LOGO'].includes(upper) && !actor.isStaff) { await useNameAsLogo(actor); return reply(actor.phone).text('✅ Done. Your business name is now your logo on receipts.'); }
+  if (['MY CLIENTS', 'MY CUSTOMERS', 'CLIENTS', 'CUSTOMERS'].includes(upper)) return reply(actor.phone).text(myClientsText(await clientStats(b.id)));
+  if (['WIN BACK', 'WINBACK', 'WIN-BACK'].includes(upper)) return customerMessagesReply(actor, 'winback');
+  if (['THANK', 'THANK CUSTOMERS', 'THANK BEST CUSTOMERS', 'VIP'].includes(upper)) return customerMessagesReply(actor, 'thank_top');
+  if (['START', 'GETTING STARTED', 'GUIDE', 'HOW IT WORKS', 'HOW DOES THIS WORK', 'HOW DOES IT WORK'].includes(upper)) return checklistReply(actor);
   if (upper === 'CHASE') return chaseDebtsReply(actor);
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
@@ -410,6 +431,7 @@ function helpMenu(actor: Actor): Reply {
     '🧾 Transfer screenshot → fake-alert check',
     '❓ Ask: "who owes me?", "profit this week"',
     '💬 Paste a customer\'s "too cost" → closing replies',
+    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo)',
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
@@ -454,7 +476,14 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     case 'ACTOK': return confirmAction(actor, redis, a!);
     case 'ACTNO': return cancelAction(actor, redis, a!);
     case 'ACTUNDO': return undoAction(actor, redis, a!);
-    case 'RCPT': return customerReceiptReply(actor, a!);
+    case 'RCPT': return customerReceiptReply(actor, a!, undefined, b2);
+    case 'LOGO': {
+      if (actor.isStaff) return reply(actor.phone).text('Only the owner can change the logo.');
+      const batch = b2 && b2 !== '-' ? b2 : null;
+      if (a === 'ask') { await redis.set(AWAIT_LOGO_KEY(actor.phone), batch ?? '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
+      await useNameAsLogo(actor);
+      return batch ? customerReceiptReply(actor, batch) : reply(actor.phone).text('✅ Done. Your business name is your logo on receipts.');
+    }
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
     case 'PLANS': return plansMenu(actor);
@@ -532,6 +561,8 @@ async function runBrain(
     case 'RECORD_DEBTS': return proposeDebts(actor, redis, brain.debts);
     case 'SET_PRODUCTS': return proposeProducts(actor, redis, brain.products);
     case 'UPDATE_CUSTOMER': return saveCustomerPhone(actor, brain.customer_update?.name ?? '', brain.customer_update?.phone ?? '');
+    case 'RECORD_CLIENTS': return proposeClients(actor, redis, brain.clients);
+    case 'CUSTOMER_OUTREACH': return customerMessagesReply(actor, brain.outreach ?? 'winback');
     case 'CHASE_DEBTS': return chaseDebtsReply(actor);
     case 'UNDO_LAST': return undoAndRespond(actor, await latestUndoableBatch(actor.business.id, actor.user.id));
     case 'CORRECT_LAST': return reply(actor.phone).text(CORRECT_LAST_REPLY);
@@ -564,8 +595,12 @@ async function runBrain(
         'Clear daylight photos work best — I\'ll clean up the background.',
       );
     }
-    case 'QUERY_BUSINESS':
-      return reply(actor.phone).text(await answerQuery(actor.business, brain.query ?? { kind: 'profit' }));
+    case 'QUERY_BUSINESS': {
+      const q = brain.query ?? { kind: 'profit' as const };
+      if (q.kind === 'customers') return reply(actor.phone).text(myClientsText(await clientStats(actor.business.id)));
+      if (q.kind === 'lapsed_customers') return reply(actor.phone).text(lapsedText(await clientStats(actor.business.id)));
+      return reply(actor.phone).text(await answerQuery(actor.business, q));
+    }
     case 'BUSINESS_ADVICE': {
       const advisor = `${env.WEB_APP_URL.replace(/\/$/, '')}/advisor`;
       const { ok, n } = await dailyCount(redis, `advice:${actor.phone}:${watDateKey()}`, ADVICE_PER_DAY);

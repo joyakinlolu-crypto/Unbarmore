@@ -198,3 +198,26 @@ describe('honest answers for what is not built yet', () => {
     expect(owingContext([{ name: 'Femi', outstanding_debt_ngn: 14000 }, { name: 'Paid', outstanding_debt_ngn: 0 }])).toEqual(['Femi ₦14,000']);
   });
 });
+
+describe('client list', () => {
+  it('previews a list (phones normalised), confirms, and undo removes only the new ones', async () => {
+    store.customers.push({ id: 'c0', business_id: 'b1', name: 'Femi', name_key: 'femi', outstanding_debt_ngn: 0, phone_number: null });
+    const { kv: k } = kv();
+    const { proposeClients } = await import('../flows/records.js');
+    const r = await proposeClients(actor, k, [{ name: 'Femi', phone: '08031234567' }, { name: 'Kalu', phone: '+234 805 123 4567' }, { name: 'Bisi' }]);
+    const t = text(r);
+    expect(t).toContain('1. Femi — 2348031234567 _(already on your list)_');
+    expect(t).toContain('2. Kalu — 2348051234567');
+    expect(t).toContain('2 new · 1 already saved');
+    expect(store.customers).toHaveLength(1);                         // nothing saved yet
+    const done = await confirmAction(actor, k, btn(r, 0).split(':')[1]!);
+    expect(text(done)).toContain('3 customers on your list');
+    expect(store.customers.map((c) => [c.name, c.phone_number])).toEqual([['Femi', '2348031234567'], ['Kalu', '2348051234567'], ['Bisi', null]]);
+    await undoAction(actor, k, btn(done, 0).split(':')[1]!);
+    expect(store.customers.map((c) => [c.name, c.phone_number])).toEqual([['Femi', null]]); // Kalu & Bisi removed, Femi's phone restored
+  });
+  it('drops junk names and bad phone numbers instead of saving them', async () => {
+    const { cleanClients } = await import('../flows/records.js');
+    expect(cleanClients([{ name: 'A' }, { name: 'Tunde', phone: '123' }, { name: 'tunde', phone: '08031234567' }, { name: '  ' }])).toEqual([{ name: 'tunde', phone: '2348031234567' }]);
+  });
+});

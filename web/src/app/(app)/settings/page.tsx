@@ -31,7 +31,7 @@ export default async function Settings() {
     <main className="space-y-4 p-3">
       <section className={card}><h2 className="mb-4 font-semibold">Business profile</h2>
         <ProfileForm name={b.name} rc={b.rc_number ?? ''} theme={b.studio_theme} themesLocked={b.subscription_tier === 'free_limited'} />
-        <p className="mt-3 text-xs text-slate-400">Logo on receipts is coming soon.</p>
+        <p className="mt-3 text-xs text-slate-500">{b.logo_url && b.logo_url !== 'none' ? '✅ Your logo is on your receipts and statements.' : 'Receipts show your business name as your logo.'} To add or change your logo, type <b>LOGO</b> on WhatsApp and send the picture.</p>
       </section>
 
       <section className={card}><h2 className="mb-2 font-semibold">Evening money alert</h2><PushPrompt compact /></section>

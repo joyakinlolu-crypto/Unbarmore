@@ -163,7 +163,7 @@ try {
   r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text));
   ok('tap Skip → welcome with examples and the referral code', !!r.reply && /UNBAR-/.test(r.reply.text));
   const welcomeText = r.reply?.text ?? '';
-  ok('welcome shows what to do now: voice note, photos, screenshot — and "just ask me" chat', /Voice note/.test(welcomeText) && /photos/.test(welcomeText) && /screenshot/.test(welcomeText) && /ask me about your business/i.test(welcomeText), welcomeText.replace(/\n/g, ' | ').slice(0, 200));
+  ok('welcome gives 3 clear first steps (tell me a sale · tell me who owes you · make a receipt), mentions photos/screenshots and "ask me anything", and says how to see progress (START)', /Start with these 3 steps/.test(welcomeText) && /Tell me a sale/.test(welcomeText) && /who owes you/i.test(welcomeText) && /receipt/i.test(welcomeText) && /photos/.test(welcomeText) && /screenshot/.test(welcomeText) && /ask me anything about your business/i.test(welcomeText) && /START/.test(welcomeText), welcomeText.replace(/\n/g, ' | ').slice(0, 200));
   ok('welcome carries a one-tap dashboard link + the "evening alert" instruction', /auth\/verify\?token=[a-f0-9]{64}/.test(welcomeText) && /Turn on my evening alert/.test(welcomeText) && /Home Screen/.test(welcomeText));
   ok('that was ONE welcome message', real(r.all).length === 1, `${real(r.all).length} message(s)`);
 
@@ -179,7 +179,11 @@ try {
   ok('that was exactly one outbound message for the action', real(r.all).length === 1, `${real(r.all).length} message(s)`);
   ok('PDF quota untouched until a receipt is actually requested', Number((await rows(`businesses?id=eq.${biz!.id}&select=pdf_receipts_used_this_month`))[0]?.pdf_receipts_used_this_month) === 0);
   const rcptId = r.reply?.buttons.find((b) => b.id.startsWith('RCPT:'))?.id ?? '';
-  const rc = await ask('receipt-button', () => button(rcptId), (v) => v.kind === 'document');
+  ok('first confirmed entry also cheers and points to the next step ("🎉 First entry saved! Next: tell me who owes you")', /First entry saved/.test(r.reply?.text ?? ''));
+  const lq = await ask('receipt-logo-q', () => button(rcptId), (v) => /Do you have a logo/.test(v.text));
+  ok('the FIRST receipt asks once: "Do you have a logo?" with [Send my logo] / [Use my name], and makes no PDF yet', !!lq.reply && lq.reply.kind !== 'document' && lq.reply.buttons.map((b) => b.id.split(':').slice(0, 2).join(':')).join() === 'LOGO:ask,LOGO:name', lq.reply?.text.replace(/\n/g, ' | '));
+  const nameBtn = lq.reply?.buttons.find((b) => b.id.startsWith('LOGO:name:'))?.id ?? '';
+  const rc = await ask('receipt-button', () => button(nameBtn), (v) => v.kind === 'document');
   const cap = rc.reply?.text ?? '';
   ok('tap 🧾 Customer Receipt → ONE document message with a forward-ready caption', !!rc.reply && real(rc.all).length === 1, cap.replace(/\n/g, ' | '));
   ok('receipt shows business, customer, item, paid ₦30,000, remaining debt ₦20,000 and a date', /Ada Fabrics/.test(cap) && /Mama Tunde/.test(cap) && /Lace/.test(cap) && /Paid: ₦30,000/.test(cap) && /Balance remaining: ₦20,000/.test(cap) && /20\d\d/.test(cap));
@@ -238,8 +242,8 @@ try {
     // The app's own voice function (tries the backup speech model when the main one is out of quota).
     const { synthesizeVoiceover } = await import('../src/services/ttsService.ts');
     let wav: Buffer | null = null;
-    for (let i = 0; i < 3 && !wav; i++) {
-      try { wav = (await synthesizeVoiceover('I don sell three ankara for forty five thousand naira cash, and I buy transport three thousand naira.')).data; } catch { await sleep(4000); }
+    for (let i = 0; i < 6 && !wav; i++) { // Google's free speech tier is rate-limited; wait it out
+      try { wav = (await synthesizeVoiceover('I don sell three ankara for forty five thousand naira cash, and I buy transport three thousand naira.')).data; } catch { await sleep(10_000); }
     }
     if (!wav) throw new Error('could not synthesise test audio');
     media.set('VOICE1', { data: wav, mime: 'audio/wav' });
@@ -501,6 +505,52 @@ try {
   ok('"I owe Mama Ade 30k" → honest "I don\'t track money you owe suppliers yet" (not silently logged as something else)', !!r.reply && /don't track money \*?you\*? owe|don't track money you owe/i.test(r.reply.text) && r.reply.buttons.length === 0, r.reply?.text.replace(/\n/g, ' | '));
   r = await ask('thanks', () => text('thank you'), (v) => /Anytime|welcome/i.test(v.text), 40_000);
   ok('"thank you" → a short friendly line (not "I only help with…")', !!r.reply && !/only help/i.test(r.reply.text) && r.reply.text.length < 120, r.reply?.text);
+
+  // ───── receipts: several sales ≠ one person; logo upload ─────
+  r = await ask('two-sales', () => text('sold 2 gele 20k cash, sold 1 ankara 15k cash'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const twoConfirm = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id ?? '';
+  r = await ask('two-sales-confirm', () => button(twoConfirm), (v) => /Saved/.test(v.text) && v.buttons.some((b) => b.id.startsWith('RCPT:')));
+  const twoRcpt = r.reply?.buttons.find((b) => b.id.startsWith('RCPT:'))?.id ?? '';
+  r = await ask('two-sales-receipt', () => button(twoRcpt), (v) => /same customer/i.test(v.text) || v.kind === 'document');
+  ok('two sales in one message → it ASKS "Are they all for the same customer?" (no single receipt assumed)', !!r.reply && r.reply.kind !== 'document' && /2 sales/.test(r.reply.text) && r.reply.buttons.length === 2, r.reply?.text.replace(/\n/g, ' | '));
+  const diffBtn = r.reply?.buttons.find((b) => b.id.endsWith(':pick'))?.id ?? '';
+  r = await ask('two-sales-pick', () => button(diffBtn), (v) => v.buttons.length >= 2);
+  ok('"Different customers" → asks which sale (one button per sale)', !!r.reply && r.reply.buttons.length === 2 && r.reply.buttons.every((b) => /^RCPT:.*:L\d$/.test(b.id)), r.reply?.buttons.map((b) => b.title).join(' | '));
+  const line1 = r.reply?.buttons[1]?.id ?? '';
+  r = await ask('two-sales-line', () => button(line1), (v) => v.kind === 'document');
+  ok('picking one sale → a receipt for ONLY that sale', !!r.reply && /Ankara/.test(r.reply.text) && !/Gele/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 160));
+
+  const logoJpg = path.join(tmp, 'logo.jpg');
+  execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=0x7C3AED:s=300x300', '-frames:v', '1', logoJpg]);
+  media.set('LOGO1', { data: fs.readFileSync(logoJpg), mime: 'image/jpeg' });
+  r = await ask('logo-cmd', () => text('LOGO'), (v) => /Send your logo/.test(v.text));
+  ok('"LOGO" → asks for the picture', !!r.reply);
+  r = await ask('logo-photo', () => webhook({ type: 'image', image: { id: 'LOGO1', mime_type: 'image/jpeg' } }), (v) => /Logo saved/.test(v.text), 40_000);
+  ok('sending the picture saves it as the logo (not treated as a product photo / video request)', !!r.reply && /Logo saved/.test(r.reply.text), r.reply?.text);
+  const logoPath = String((await rows(`businesses?id=eq.${biz!.id}&select=logo_url`))[0]?.logo_url ?? '');
+  ok('database: logo_url points at the stored logo', logoPath === `${biz!.id}/logo.png`, logoPath);
+  r = await ask('receipt-with-logo', () => text('RECEIPT Mama'), (v) => v.kind === 'document');
+  if (r.reply?.header?.link) {
+    const pf = path.join(tmp, 'rc-logo.pdf'); fs.writeFileSync(pf, Buffer.from(await (await fetch(r.reply.header.link)).arrayBuffer()));
+    const imgs = execFileSync('pdfimages', ['-list', pf]).toString().split('\n').filter((l) => /^\s*\d+\s/.test(l)).length;
+    ok('the receipt PDF now contains the logo image at the top', imgs >= 1, `${imgs} image(s) in the PDF`);
+  }
+
+  // ───── client list, win-back, onboarding checklist ─────
+  r = await ask('clients-add', () => text('add my customers: Femi 08031234567, Kalu 08051234567'), (v) => v.buttons.some((b) => b.id.startsWith('ACTOK:')));
+  ok('a list of clients → preview with their numbers in international format + Confirm', !!r.reply && /Femi — 2348031234567/.test(r.reply.text) && /Kalu — 2348051234567/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+  const cok = r.reply?.buttons.find((b) => b.id.startsWith('ACTOK:'))?.id ?? '';
+  await ask('clients-confirm', () => button(cok), (v) => /on your list/.test(v.text));
+  const fem = (await rows(`customers?business_id=eq.${biz!.id}&select=name,phone_number&name=eq.Femi`))[0];
+  ok('database: Femi saved with his number', fem?.phone_number === '2348031234567', JSON.stringify(fem));
+  r = await ask('my-clients', () => text('MY CLIENTS'), (v) => /Your customers/.test(v.text));
+  ok('MY CLIENTS → the list with spend, last purchase and 📞 where a number is saved', !!r.reply && /Mama Tunde/.test(r.reply.text) && /Femi/.test(r.reply.text) && /📞/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 260));
+  r = await ask('who-stopped', () => text('which customers have stopped buying'), (v) => /gone quiet|Customers who stopped|Nobody has gone quiet/i.test(v.text), 40_000);
+  ok('"which customers have stopped buying" → answered from real data (nobody is 30+ days quiet yet)', !!r.reply && /Nobody has gone quiet/.test(r.reply.text), r.reply?.text);
+  r = await ask('winback', () => text('WIN BACK'), (v) => v.text.length > 10, 40_000);
+  ok('WIN BACK with nobody quiet → says so honestly (no invented messages)', !!r.reply && /Nobody has gone quiet/.test(r.reply.text), r.reply?.text);
+  r = await ask('start', () => text('START'), (v) => /Getting started/.test(v.text));
+  ok('START → "How Unbarmore works" + a live checklist (✅ done / ⬜ to do) + the next step', !!r.reply && /How Unbarmore works/.test(r.reply.text) && /✅/.test(r.reply.text) && /⬜/.test(r.reply.text) && /Next:/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 300));
 
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));

@@ -22,7 +22,8 @@ const MAX_AMOUNT = 1_000_000_000;
 
 export interface DebtItem { name: string; amount: number; due: string | null; since: string | null }
 export interface ProductItem { name: string; quantity?: number; cost?: number; price?: number }
-type Pending = { kind: 'debts'; businessId: string; items: DebtItem[] } | { kind: 'products'; businessId: string; items: ProductItem[] };
+export interface ClientItem { name: string; phone: string | null }
+type Pending = { kind: 'debts'; businessId: string; items: DebtItem[] } | { kind: 'products'; businessId: string; items: ProductItem[] } | { kind: 'clients'; businessId: string; items: ClientItem[] };
 
 const key = (phone: string, token: string) => `pending:${phone}:${token}`;
 const undoKey = (phone: string, token: string) => `undo:${phone}:${token}`;
@@ -121,11 +122,46 @@ export async function proposeProducts(actor: Actor, kv: KV, raw: Parameters<type
     .button(`ACTNO:${tk}`, '✖ Cancel');
 }
 
+// ═════════════════════════ CLIENT LIST ═════════════════════════
+
+export function cleanClients(raw: { name: string; phone?: string }[] | undefined): ClientItem[] {
+  const by = new Map<string, ClientItem>();
+  for (const r of raw ?? []) {
+    const name = normName(String(r.name ?? '')).slice(0, 60);
+    if (name.length < 2) continue;
+    const phone = r.phone ? normalisePhone(r.phone) : null;
+    const k = nameKey(name);
+    by.set(k, { name, phone: phone ?? by.get(k)?.phone ?? null });
+  }
+  return [...by.values()];
+}
+
+export async function proposeClients(actor: Actor, kv: KV, raw: Parameters<typeof cleanClients>[0]): Promise<Reply> {
+  const items = cleanClients(raw);
+  if (!items.length) return reply(actor.phone).text('Send me the names, with phone numbers if you have them, like: _add my customers: Femi 08031234567, Kalu 08051234567_');
+  if (items.length > MAX_RECORD_LINES * 2) return reply(actor.phone).text(`That's ${items.length} people. Please send ${MAX_RECORD_LINES * 2} or fewer at a time.`);
+  const { data } = await db.from('customers').select('name_key').eq('business_id', actor.business.id).in('name_key', items.map((i) => nameKey(i.name)));
+  const have = new Set((data ?? []).map((c) => c.name_key as string));
+  const tk = token();
+  await kv.set(key(actor.phone, tk), JSON.stringify({ kind: 'clients', businessId: actor.business.id, items } satisfies Pending), 'EX', PENDING_TTL_S);
+  const fresh = items.filter((i) => !have.has(nameKey(i.name))).length;
+  return reply(actor.phone)
+    .text(
+      '👥 *Add to your customer list?*',
+      ...items.map((i, n) => `${n + 1}. ${i.name}${i.phone ? ` — ${i.phone}` : ''}${have.has(nameKey(i.name)) ? ' _(already on your list)_' : ''}`),
+      '',
+      `${fresh} new · ${items.length - fresh} already saved. This doesn't change any money figures.`,
+    )
+    .button(`ACTOK:${tk}`, '✅ Confirm')
+    .button(`ACTNO:${tk}`, '✖ Cancel');
+}
+
 // ═════════════════════════ CONFIRM / CANCEL / UNDO ═════════════════════════
 
 type Undo =
   | { kind: 'debts'; rows: { id: string; added: number; prevSince: string | null; prevDue: string | null }[] }
-  | { kind: 'products'; rows: { id: string; created: boolean; prev: { stock: number; cost: number; price: number } }[] };
+  | { kind: 'products'; rows: { id: string; created: boolean; prev: { stock: number; cost: number; price: number } }[] }
+  | { kind: 'clients'; rows: { id: string; created: boolean; prevPhone: string | null }[] };
 
 export async function confirmAction(actor: Actor, kv: KV, tk: string): Promise<Reply> {
   const raw = await kv.getdel(key(actor.phone, tk)); // atomic: a double-tap can only apply once
@@ -152,6 +188,21 @@ export async function confirmAction(actor: Actor, kv: KV, tk: string): Promise<R
     const total = p.items.reduce((a, i) => a + i.amount, 0);
     return reply(actor.phone)
       .text(`✅ Added ${p.items.length} ${p.items.length === 1 ? 'debt' : 'debts'}: *${ngn(total)}* owed to you.`, '', 'Say *WHO DEY OWE ME* to see them, or *CHASE* for ready-to-send reminders.')
+      .button(`ACTUNDO:${undoToken}`, '↩️ Undo');
+  }
+
+  if (p.kind === 'clients') {
+    const undo: Undo = { kind: 'clients', rows: [] };
+    for (const c of p.items) {
+      const { data: ex } = await db.from('customers').select('id, phone_number').eq('business_id', actor.business.id).eq('name_key', nameKey(c.name)).maybeSingle();
+      const prevPhone = (ex?.phone_number as string | null) ?? null; // read BEFORE we overwrite it
+      const id = ex?.id ?? (await upsertCustomer(actor.business.id, c.name));
+      if (c.phone) await db.from('customers').update({ phone_number: c.phone }).eq('id', id).eq('business_id', actor.business.id);
+      undo.rows.push({ id: id as string, created: !ex, prevPhone });
+    }
+    await kv.set(undoKey(actor.phone, undoToken), JSON.stringify(undo), 'EX', UNDO_TTL_S);
+    return reply(actor.phone)
+      .text(`✅ ${p.items.length} ${p.items.length === 1 ? 'customer' : 'customers'} on your list.`, '', 'Say *MY CLIENTS* to see them, or *WIN BACK* when some go quiet.')
       .button(`ACTUNDO:${undoToken}`, '↩️ Undo');
   }
 
@@ -190,6 +241,13 @@ export async function undoAction(actor: Actor, kv: KV, tk: string): Promise<Repl
       await db.from('customers').update({ outstanding_debt_ngn: left, debt_since: left > 0 ? undefined : null, debt_due_date: r.prevDue }).eq('id', r.id).eq('business_id', actor.business.id);
     }
     return reply(actor.phone).text('↩️ Done. Those debts are removed.');
+  }
+  if (u.kind === 'clients') {
+    for (const r of u.rows) {
+      if (r.created) { const del = await db.from('customers').delete().eq('id', r.id).eq('business_id', actor.business.id); if (!del.error) continue; }
+      await db.from('customers').update({ phone_number: r.prevPhone }).eq('id', r.id).eq('business_id', actor.business.id);
+    }
+    return reply(actor.phone).text('↩️ Done. Your customer list is back as it was.');
   }
   for (const r of u.rows) {
     if (r.created) { const del = await db.from('products').delete().eq('id', r.id).eq('business_id', actor.business.id); if (!del.error) continue; }

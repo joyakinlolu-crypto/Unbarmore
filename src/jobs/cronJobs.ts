@@ -8,6 +8,7 @@ import { createOwnerMagicLink, createOwnerMagicToken } from '../services/webLink
 import { businessesWithPush, pushEnabled, sendPushToBusiness } from '../services/push.js';
 import { reply, sendTemplate } from '../services/whatsapp.js';
 import { buildDailyPush } from '../flows/dailyPush.js';
+import { nudgeLine } from '../flows/onboarding.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
 
@@ -85,6 +86,8 @@ async function dailyCheckin(): Promise<void> {
       }
       if (byStaff.size) r.text('', '👥 *Staff today:*', ...[...byStaff].map(([n, v]) => `• ${n}: ${ngn(v)}`));
     }
+    const nudge = await nudgeLine(biz).catch(() => null); // new accounts: the one next thing to do
+    if (nudge) r.text('', nudge);
     await r.send().catch(() => undefined);
   }
 }

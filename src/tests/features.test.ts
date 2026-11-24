@@ -34,7 +34,7 @@ import { withInterimNotice } from '../lib/interim.js';
 const body = (r: { toPayload(): Record<string, any> }) => JSON.stringify(r.toPayload());
 const actor = (extra: Record<string, unknown> = {}) => ({
   phone: '2348000000001', isStaff: false, user: { id: 'u1', full_name: 'Ada' },
-  business: { id: 'b1', name: 'Ada Fabrics', owner_phone: '2348000000001', subscription_tier: 'starter_5k', tx_logged_this_month: 0, rc_number: null, total_value_recovered_ngn: 0, google_sheet_id: null, ...extra },
+  business: { id: 'b1', name: 'Ada Fabrics', owner_phone: '2348000000001', subscription_tier: 'starter_5k', tx_logged_this_month: 0, rc_number: null, total_value_recovered_ngn: 0, google_sheet_id: null, logo_url: 'none', ...extra },
 }) as never;
 
 beforeEach(() => {
@@ -298,5 +298,82 @@ describe.skipIf(!hasPdftotext)('receipt invite follows the plan watermark', () =
     expect(t).not.toContain('wa.me/');
     expect(t).not.toContain('UNBAR-X87X');
     expect(t).toContain('Ada Fabrics');
+  });
+});
+
+// ───────────────────────── receipts: same customer? logo? ─────────────────────────
+describe('receipt: never assume several sales are one person', () => {
+  const two = (a: Record<string, unknown> = {}, b: Record<string, unknown> = {}) => [
+    row({ status: 'confirmed', customer_id: null, customers: null, description: '2 × Lace', total_amount_ngn: 50000, amount_paid_ngn: 50000, ...a }),
+    row({ status: 'confirmed', customer_id: null, customers: null, description: '1 × Ankara', total_amount_ngn: 15000, amount_paid_ngn: 15000, ...b }),
+  ];
+  const buttons = (r: { toPayload(): any }) => (r.toPayload() as any).interactive.action.buttons.map((x: any) => x.reply.id);
+
+  it('two sales with no customer name → asks "same customer?" instead of making one receipt', async () => {
+    m.getBatchRows.mockResolvedValueOnce(two());
+    const r = await customerReceiptReply(actor(), 'batch1');
+    expect(body(r)).toContain('2 sales');
+    expect(body(r)).toContain('same customer');
+    expect(buttons(r)).toEqual(['RCPT:batch1:one', 'RCPT:batch1:pick']);
+    expect(m.uploadFile).not.toHaveBeenCalled();
+    expect(m.consumeQuota).not.toHaveBeenCalled(); // asking costs nothing
+  });
+  it('two sales to two different named customers → also asks', async () => {
+    m.getBatchRows.mockResolvedValueOnce(two({ customer_id: 'c1', customers: { name: 'Mama Tunde' } }, { customer_id: 'c2', customers: { name: 'Bisi' } }));
+    expect(buttons(await customerReceiptReply(actor(), 'batch1'))).toEqual(['RCPT:batch1:one', 'RCPT:batch1:pick']);
+  });
+  it('two sales to the SAME named customer → one receipt, no question', async () => {
+    m.getBatchRows.mockResolvedValueOnce(two({ customer_id: 'c1', customers: { name: 'Mama Tunde' } }, { customer_id: 'c1', customers: { name: 'Mama Tunde' } }));
+    expect((await customerReceiptReply(actor(), 'batch1')).toPayload()).toMatchObject({ type: 'document' });
+  });
+  it('"Same customer" → ONE receipt with both lines', async () => {
+    m.getBatchRows.mockResolvedValueOnce(two());
+    const p = (await customerReceiptReply(actor(), 'batch1', undefined, 'one')).toPayload() as any;
+    expect(p.type).toBe('document');
+    expect(p.document.caption).toContain('2 × Lace');
+    expect(p.document.caption).toContain('1 × Ankara');
+  });
+  it('"Different customers" → lets the owner pick which sale (buttons for ≤3)', async () => {
+    m.getBatchRows.mockResolvedValueOnce(two());
+    const r = await customerReceiptReply(actor(), 'batch1', undefined, 'pick');
+    expect(buttons(r)).toEqual(['RCPT:batch1:L0', 'RCPT:batch1:L1']);
+    expect(JSON.stringify(r.toPayload())).toContain('Lace');
+  });
+  it('picking one sale → a receipt for THAT sale only, with its own number', async () => {
+    m.getBatchRows.mockResolvedValueOnce(two());
+    const p = (await customerReceiptReply(actor(), 'batch1', undefined, 'L1')).toPayload() as any;
+    expect(p.document.caption).toContain('1 × Ankara');
+    expect(p.document.caption).not.toContain('Lace');
+    expect(p.document.filename).toMatch(/-2\.pdf$/);
+  });
+  it('more than 3 sales → a list to pick from', async () => {
+    m.getBatchRows.mockResolvedValueOnce([...two(), ...two()]);
+    const p = (await customerReceiptReply(actor(), 'batch1', undefined, 'pick')).toPayload() as any;
+    expect(p.interactive.type).toBe('list');
+    expect(p.interactive.action.sections[0].rows).toHaveLength(4);
+  });
+  it('a single sale never triggers the question', async () => {
+    m.getBatchRows.mockResolvedValueOnce([two()[0]]);
+    expect((await customerReceiptReply(actor(), 'batch1')).toPayload()).toMatchObject({ type: 'document' });
+  });
+});
+
+describe('receipt: logo', () => {
+  it('first receipt asks once: send a logo, or use the business name', async () => {
+    m.getBatchRows.mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    const r = await customerReceiptReply(actor({ logo_url: null }), 'batch1');
+    expect(body(r)).toContain('Do you have a logo');
+    expect(body(r)).toContain('use your business name as your logo');
+    expect((r.toPayload() as any).interactive.action.buttons.map((b: any) => b.reply.id)).toEqual(['LOGO:ask:batch1', 'LOGO:name:batch1']);
+    expect(m.uploadFile).not.toHaveBeenCalled();
+  });
+  it('after choosing "use my name" (logo_url = none) the receipt is produced straight away', async () => {
+    m.getBatchRows.mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    expect((await customerReceiptReply(actor({ logo_url: 'none' }), 'batch1')).toPayload()).toMatchObject({ type: 'document' });
+  });
+  it('staff are not asked (only the owner sets branding)', async () => {
+    m.getBatchRows.mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    const a = { ...(actor({ logo_url: null }) as object), isStaff: true } as never;
+    expect((await customerReceiptReply(a, 'batch1')).toPayload()).toMatchObject({ type: 'document' });
   });
 });

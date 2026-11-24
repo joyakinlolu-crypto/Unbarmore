@@ -15,6 +15,7 @@ export interface Business {
   billing_cycle: 'monthly' | 'annual'; subscription_expires_at: string; trial_ends_at: string;
   referral_code: string; referral_wallet_ngn: number; total_value_recovered_ngn: number;
   google_sheet_id: string | null; business_category: string | null;
+  logo_url: string | null; created_at: string; videos_used_this_month: number;
 }
 export interface Session extends SessionClaims { business: Business }
 

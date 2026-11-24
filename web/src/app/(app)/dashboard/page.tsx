@@ -4,6 +4,7 @@ import PushPrompt from '@/components/PushPrompt';
 import { requireSession } from '@/lib/auth';
 import { ngn, waLink, watDate, watDayStart, watMonthStart } from '@/lib/format';
 import { db } from '@/lib/supabase';
+import { onboardingSteps } from '@/lib/progress';
 import { botNumber } from '@/lib/whatsapp';
 
 export const metadata = { title: 'Overview' };
@@ -41,6 +42,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const recovered = collectedEver + protectedMargin; // money Unbarmore got back: debts collected + margin protected
   const topDebtors = ((debt.data ?? []) as { name: string; outstanding_debt_ngn: string }[]).slice(0, 3);
   const bot = botNumber();
+  const young = Date.now() - new Date(b.created_at).getTime() < 30 * 86_400_000;
+  const steps = young ? await onboardingSteps(b.id, Number(b.videos_used_this_month ?? 0), bot) : [];
+  const stepsDone = steps.filter((x) => x.done).length;
   const catRows = ((cats.data ?? []) as { category: string; amount_ngn: string }[]).slice(0, 5);
   const catMax = Math.max(1, ...catRows.map((c) => Number(c.amount_ngn)));
   const points: Point[] = ((series.data ?? []) as { bucket: string; revenue_ngn: string; spend_ngn: string }[]).map((r) => ({
@@ -59,6 +63,24 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             </>
           : <p className="mt-2 text-base font-medium leading-snug">Chase your first debt and every naira you get back shows up here.</p>}
       </section>
+
+      {steps.length > 0 && stepsDone < steps.length && (
+        <section className="rounded-3xl border border-royal/20 bg-blue-50 p-4" aria-label="Getting started">
+          <h2 className="font-semibold text-royal">Getting started: {stepsDone} of {steps.length} done</h2>
+          <p className="mt-0.5 text-sm text-slate-600">Unbarmore works like this: you talk to it on WhatsApp, it keeps your books, and this app shows you the result. Do these in order:</p>
+          <ol className="mt-3 space-y-2">
+            {steps.map((x) => (
+              <li key={x.id} className="flex items-start gap-2 text-sm">
+                <span aria-hidden>{x.done ? '✅' : '⬜'}</span>
+                <span className={x.done ? 'text-slate-400 line-through' : ''}>
+                  <b>{x.title}.</b> {!x.done && x.text}
+                  {!x.done && <> <a href={x.href === 'settings' ? '/settings' : x.href} target={x.href === 'settings' ? undefined : '_blank'} rel="noopener" className="font-semibold text-royal underline">Do it</a></>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       <PushPrompt />
 

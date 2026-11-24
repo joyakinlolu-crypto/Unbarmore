@@ -51,6 +51,14 @@ const cases: [string, string, ((r: R) => boolean)?][] = [
   ['show me my debtors', 'QUERY_BUSINESS', (r) => r.query?.kind === 'debtors'],
   ['who owe me pass', 'QUERY_BUSINESS', (r) => r.query?.kind === 'debtors'],
   ['total expenses this month', 'QUERY_BUSINESS', (r) => r.query?.kind === 'expenses_by_category'],
+  // ── client list and getting customers back ──
+  ['add my customers: Femi 08031234567, Kalu 08051234567', 'RECORD_CLIENTS', (r) => r.clients?.length === 2 && /08031234567/.test(r.clients[0]?.phone ?? '')],
+  ['save these clients for me: Mama Ade, Chika 08099999999', 'RECORD_CLIENTS', (r) => r.clients?.length === 2],
+  ['show my customers', 'QUERY_BUSINESS', (r) => r.query?.kind === 'customers'],
+  ['my client list', 'QUERY_BUSINESS', (r) => r.query?.kind === 'customers'],
+  ['which customers have stopped buying from me', 'QUERY_BUSINESS', (r) => r.query?.kind === 'lapsed_customers'],
+  ['write message for customers wey don stop to buy', 'CUSTOMER_OUTREACH', (r) => r.outreach === 'winback'],
+  ['thank my best customers', 'CUSTOMER_OUTREACH', (r) => r.outreach === 'thank_top'],
   // ── actions on debts / entries ──
   ['remind everyone owing me', 'CHASE_DEBTS'],
   ['send reminders', 'CHASE_DEBTS'],

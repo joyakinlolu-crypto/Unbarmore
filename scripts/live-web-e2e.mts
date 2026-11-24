@@ -93,6 +93,21 @@ try {
   ok('after ₦30,000 collected + ₦16,000 margin protected: headline shows ₦46,000 with both parts', /Money Unbarmore got back for you ₦46,000 ₦30,000 collected from customers \+ ₦16,000 margin protected/.test(dTxt2), (dTxt2.match(/Money Unbarmore got back.{0,120}/) ?? [''])[0]);
   await db.from('businesses').update({ total_value_recovered_ngn: 0 }).eq('id', bid);
 
+  // ───────── Charts page, Customers tab, Getting-started card ─────────
+  const cRes = await fetch(`${BASE}/charts`, { headers: { cookie } });
+  const cTxt = text(await cRes.text());
+  ok('/charts → 200 with all the charts (trend, comparison, best days, sellers, customers, payments, costs, debt age, stock)', cRes.status === 200 && ['Sales and profit', 'This period vs the one before', 'Your best days', 'Best sellers', 'Best customers', 'How you get paid', 'Where your money goes', 'Who owes you, and for how long', 'Stock health'].every((h) => cTxt.includes(h)), cRes.status + '');
+  ok('charts show THIS business\'s real figures: Swiss Lace + Mama Tunde at ₦200,000, Fuel/Diesel ₦60,000, ₦95,000 owed', cTxt.includes('Swiss Lace') && cTxt.includes('Mama Tunde') && cTxt.includes('₦200,000') && cTxt.includes('Fuel/Diesel') && cTxt.includes('₦60,000') && cTxt.includes('₦95,000'));
+  ok('each chart gives a plain-language takeaway (e.g. best day, biggest cost, old debts)', /is your strongest day/.test(cTxt) && /is your biggest cost/.test(cTxt) && /Swiss Lace brings in 100% of your sales/.test(cTxt), (cTxt.match(/is your strongest day[^.]*\./) ?? [''])[0]);
+  const cHtml = await (await fetch(`${BASE}/charts`, { headers: { cookie } })).text();
+  ok('every chart links to the advisor with a ready question ("Ask your advisor what to do about this")', (cHtml.match(/href="\/advisor\?q=/g) ?? []).length >= 8);
+  ok('7-day and 90-day views work', (await fetch(`${BASE}/charts?range=7`, { headers: { cookie } })).status === 200 && (await fetch(`${BASE}/charts?range=90`, { headers: { cookie } })).status === 200);
+  ok('/charts without a login → redirected to /login', (await fetch(`${BASE}/charts`, { redirect: 'manual' })).status === 307);
+  const cu = text(await (await fetch(`${BASE}/ledger?tab=customers`, { headers: { cookie } })).text());
+  ok('/ledger?tab=customers lists Mama Tunde with what she owes and a WhatsApp button', cu.includes('Mama Tunde') && cu.includes('owes ₦95,000'));
+  const dTxt3 = text(await (await fetch(`${BASE}/dashboard`, { headers: { cookie } })).text());
+  ok('new account sees "Getting started: 2 of 5 done" (sale logged + debt recorded) with the next steps', /Getting started: 2 of 5 done/.test(dTxt3) && /Make a customer receipt/.test(dTxt3));
+
   // ───────── evening alerts (web push) ─────────
   const subBody = { endpoint: 'https://fcm.googleapis.com/fcm/send/e2e-test-device', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };
   const pushPost = (body: unknown, headers: Record<string, string> = {}) => fetch(`${BASE}/api/push/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), redirect: 'manual' });
@@ -184,6 +199,10 @@ try {
   ok('tapping it ends clearly: on, or a readable error with the button usable again (never stuck on "Turning on…")', outcome !== 'stuck' && (await page2.getByRole('button', { name: /Turning on/ }).count()) === 0, `outcome: ${outcome}: ${await page2.locator('section[aria-label="Evening money alert"] [role=alert]').textContent().catch(() => '')}`);
   await ctx2.close();
   await page.goto(`${BASE}/dashboard`);
+  await page.goto(`${BASE}/advisor?q=${encodeURIComponent('Why did my profit change?')}`);
+  ok('a chart\'s "ask your advisor" link pre-fills the question (not auto-sent, so it never burns a free chat)', (await page.locator('textarea').inputValue()) === 'Why did my profit change?');
+  await page.goto(`${BASE}/charts`); await page.waitForLoadState('networkidle'); await page.screenshot({ path: 'tmp/e2e-charts.png', fullPage: true });
+  ok('bottom navigation has 5 tabs including Charts', (await page.locator('nav[aria-label="Main"] a').count()) === 5);
   await page.goto(`${BASE}/advisor`);
   ok('advisor starts with the 4 quick-prompt chips', (await page.locator('button:has-text("Where am I leaking money")').count()) === 1);
 

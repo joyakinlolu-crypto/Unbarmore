@@ -23,21 +23,28 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
  * Send ONLY the words to be spoken. Gemini speech models read any instruction placed in the prompt out loud
  * ("Read this advert in a warm, energetic voice…" was being spoken before every ad), so style comes from the voice and the text itself.
  */
+/** Retry tuning (a test sets delayMs to 0). A busy or rate-limited speech model usually recovers within seconds. */
+export const ttsTuning = { rounds: 3, delayMs: 4000 };
+
 async function geminiTts(text: string): Promise<Voiceover> {
   const models = [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL].filter((m, i, a) => m && a.indexOf(m) === i);
   let lastErr: unknown;
-  for (const model of models) {
-    try {
-      const res = await beta.models.generateContent({
-        model,
-        contents: text,
-        config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } } } },
-      });
-      const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
-      if (!part?.data) throw new Error('Gemini TTS returned no audio');
-      const raw = Buffer.from(part.data, 'base64');
-      return /wav/i.test(part.mimeType ?? '') ? { data: raw, ext: 'wav', mime: 'audio/wav' } : { data: pcmToWav(raw), ext: 'wav', mime: 'audio/wav' };
-    } catch (e) { lastErr = e; } // out of quota / overloaded → next model
+  // Try every speech model, and if all are busy/out of quota, wait a moment and go round again: a silent ad is worse than a slow one.
+  for (let round = 0; round < ttsTuning.rounds; round++) {
+    if (round > 0) await new Promise((r) => setTimeout(r, ttsTuning.delayMs * round));
+    for (const model of models) {
+      try {
+        const res = await beta.models.generateContent({
+          model,
+          contents: text,
+          config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } } } },
+        });
+        const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
+        if (!part?.data) throw new Error('Gemini TTS returned no audio');
+        const raw = Buffer.from(part.data, 'base64');
+        return /wav/i.test(part.mimeType ?? '') ? { data: raw, ext: 'wav', mime: 'audio/wav' } : { data: pcmToWav(raw), ext: 'wav', mime: 'audio/wav' };
+      } catch (e) { lastErr = e; } // out of quota / overloaded → next model, then next round
+    }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }

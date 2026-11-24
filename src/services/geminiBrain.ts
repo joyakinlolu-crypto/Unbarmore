@@ -42,14 +42,14 @@ const BankAlertSchema = z.object({
 });
 export type BankAlert = z.infer<typeof BankAlertSchema>;
 
-export const QUERY_KINDS = ['profit', 'debtors', 'top_products', 'top_customers', 'dead_stock', 'expenses_by_category', 'stock_level', 'cash_today'] as const;
+export const QUERY_KINDS = ['profit', 'debtors', 'top_products', 'top_customers', 'customers', 'lapsed_customers', 'dead_stock', 'expenses_by_category', 'stock_level', 'cash_today'] as const;
 
 /** Things people ask for that the product does not do yet. Each gets an honest, fixed reply (see flows/records.ts). */
 export const NOT_SUPPORTED_KINDS = ['I_OWE_SUPPLIER', 'OPENING_CASH', 'BANK_BALANCE', 'PERSONAL_SPENDING', 'INVOICE', 'OTHER'] as const;
 
 export const BrainSchema = z.object({
   intent: z.enum([
-    'LOG_TRANSACTION', 'RECORD_DEBTS', 'SET_PRODUCTS', 'UPDATE_CUSTOMER', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT',
+    'LOG_TRANSACTION', 'RECORD_DEBTS', 'SET_PRODUCTS', 'UPDATE_CUSTOMER', 'RECORD_CLIENTS', 'CUSTOMER_OUTREACH', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT',
     'QUERY_BUSINESS', 'CHASE_DEBTS', 'UNDO_LAST', 'CORRECT_LAST', 'NOT_SUPPORTED', 'BUSINESS_ADVICE', 'ACKNOWLEDGE', 'HELP', 'OFF_TOPIC',
   ]),
   language: z.enum(['english', 'pidgin', 'yoruba', 'hausa', 'igbo']).describe('Language the user spoke/wrote in. Reply in the same register.'),
@@ -68,6 +68,8 @@ export const BrainSchema = z.object({
     selling_price_ngn: Naira.optional().describe('What one unit sells for.'),
   })).optional().describe('SET_PRODUCTS: opening stock counts and price/cost changes. Nothing here is a sale or a purchase.'),
   customer_update: z.object({ name: z.string(), phone: z.string() }).optional().describe('UPDATE_CUSTOMER: a customer\'s phone number.'),
+  clients: z.array(z.object({ name: z.string(), phone: z.string().optional() })).optional().describe('RECORD_CLIENTS: customers to add to the owner\'s client list, with a phone number if given.'),
+  outreach: z.enum(['winback', 'thank_top']).optional().describe('CUSTOMER_OUTREACH: winback = customers who stopped buying; thank_top = best customers.'),
   not_supported: z.enum(NOT_SUPPORTED_KINDS).optional().describe('NOT_SUPPORTED: which unsupported thing was asked.'),
   clarification_needed: z.string().optional().describe('One short question if something critical is missing (e.g. who owes a balance). Omit otherwise.'),
   bank_alert: BankAlertSchema.optional(),
@@ -207,11 +209,13 @@ Classify the message into exactly one intent and fill ONLY that intent's field:
   If they say people owe them but give no names or amounts ("3 persons own me money before now"), still use RECORD_DEBTS with an empty debts list: the system will ask for the names and amounts.
 - SET_PRODUCTS → "products". The owner states stock they already HAVE ("I have 50 lace, I bought at 15k") or changes a price or cost ("update price of lace to 20k", "lace now costs me 17k"). Never a sale, never an expense.
 - UPDATE_CUSTOMER → "customer_update". A customer's phone number to save ("Femi's number is 08031234567").
+- RECORD_CLIENTS → "clients". The owner gives a list of CUSTOMERS to remember, with or without phone numbers ("add my customers: Femi 08031234567, Kalu", "save these clients"). Not debts, not sales.
+- CUSTOMER_OUTREACH → "outreach". They want messages to bring customers back or thank them: "customers wey don stop to buy, write message for them" (winback), "message customers who haven't bought", "thank my best customers" (thank_top).
 - VERIFY_BANK_ALERT → "bank_alert". Any screenshot of a transfer, POS slip or supplier receipt.
 - DRAFT_SALES_REPLY → "sales_reply". User pastes/forwards what a customer said ("too cost", "last price?", "I go think am").
   Write 2 warm, confident Nigerian closing replies: one value-anchoring, one urgency/scarcity or bundle. Never insult. Never discount more than 10% unless the user said so.
 - CREATE_VIDEO_SCRIPT → "video_request". User wants an ad/video/promo for a product. Extract any name, price, delivery info.
-- QUERY_BUSINESS → "query". QUESTIONS about their own recorded numbers: profit, who owes (all, or one named customer via customer_name), best sellers, best customers, slow stock, expenses, stock left, cash today. A question has a question form ("who owes me?", "how much does Femi owe?"); a statement of debts is RECORD_DEBTS.
+- QUERY_BUSINESS → "query". QUESTIONS about their own recorded numbers: profit, who owes (all, or one named customer via customer_name), best sellers, best customers, slow stock, expenses, stock left, cash today, "my customers / my client list" (kind customers), "who has stopped buying / my inactive customers" (kind lapsed_customers). A question has a question form ("who owes me?", "how much does Femi owe?"); a statement of debts is RECORD_DEBTS.
 - CHASE_DEBTS → no field. They want reminder messages for people who OWE THEM money ("remind everyone owing me", "chase my debtors"). Messaging all customers in general ("message all my customers", promotions, broadcasts) is NOT_SUPPORTED with not_supported=OTHER, never CHASE_DEBTS.
 - UNDO_LAST → no field. They want the last entry removed ("delete the last entry", "cancel that").
 - CORRECT_LAST → no field. They say the last entry had a wrong amount or detail ("that last one was 25k not 35k").
@@ -296,6 +300,21 @@ export async function writeDebtReminders(businessName: string, debtors: { name: 
     system:
       'Write polite, warm, respectful Nigerian payment reminders a shop owner can forward on WhatsApp. Max 45 words each. Greet by name, mention exact amount, give an easy next step (transfer details "as before"), never threaten, preserve the relationship. Vary the wording.',
     parts: [{ text: JSON.stringify({ business: businessName, debtors }) }],
+  });
+  return out.messages;
+}
+
+/** Warm, short messages an owner forwards to customers: "we miss you" (win-back) or "thank you" (best customers). */
+export async function writeCustomerMessages(
+  businessName: string, kind: 'winback' | 'thank_top', customers: { name: string; daysSinceLastBuy: number | null; totalSpent: string }[],
+): Promise<{ customer: string; message: string }[]> {
+  const out = await generateStructured({
+    schema: DebtReminderSchema,
+    temperature: 0.7,
+    system: kind === 'winback'
+      ? 'Write short, warm Nigerian WhatsApp messages a shop owner sends to a past customer who has not bought for a while. Max 40 words each. Greet by first name, say they are missed, mention something new or an easy reason to come back (no fake discounts, no invented products), end with a simple invitation to reply. Never pushy. Vary the wording.'
+      : 'Write short, warm Nigerian WhatsApp messages a shop owner sends to one of their best customers to say thank you. Max 35 words each. Greet by first name, appreciate their loyalty, invite them to tell a friend (no invented discounts). Vary the wording.',
+    parts: [{ text: JSON.stringify({ business: businessName, customers }) }],
   });
   return out.messages;
 }

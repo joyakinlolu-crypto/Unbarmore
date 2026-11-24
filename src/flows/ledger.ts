@@ -150,6 +150,11 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
 
   r.text(`✅ Saved ${rows.length > 1 ? `${rows.length} entries` : ''}`.trim(), await todayLine(actor.business.id));
 
+  // Very first entry ever: celebrate and point at the next step (keeps new owners from stalling after one try).
+  if (actor.business.tx_logged_this_month === 0 && metered && !actor.isStaff && Date.now() - new Date(actor.business.created_at ?? Date.now()).getTime() < 3 * 86_400_000) {
+    r.text('', '🎉 *First entry saved!* Next: tell me who owes you, like _Femi owes me 14k_');
+  }
+
   // The moment that sells the app: money owed to them just came in.
   const collected = rows.filter((t) => t.tx_type === 'debt_repayment').reduce((a, t) => a + Number(t.amount_paid_ngn), 0);
   if (collected > 0) {
