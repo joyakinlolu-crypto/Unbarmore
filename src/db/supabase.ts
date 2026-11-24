@@ -344,6 +344,8 @@ export async function findBankSessionReuse(sessionId: string): Promise<{ busines
 export interface LedgerSummary {
   revenue_ngn: number; cash_in_ngn: number; expenses_ngn: number; restock_ngn: number;
   debt_collected_ngn: number; net_profit_ngn: number; tx_count: number;
+  /** Present once the database has migration 005 (true profit); absent before, and then net_profit_ngn is only "cash left". */
+  cogs_ngn?: number; gross_profit_ngn?: number; unpriced_revenue_ngn?: number;
 }
 
 export async function ledgerSummary(businessId: string, from: Date, to: Date): Promise<LedgerSummary> {
@@ -354,6 +356,7 @@ export async function ledgerSummary(businessId: string, from: Date, to: Date): P
   return {
     revenue_ngn: n('revenue_ngn'), cash_in_ngn: n('cash_in_ngn'), expenses_ngn: n('expenses_ngn'), restock_ngn: n('restock_ngn'),
     debt_collected_ngn: n('debt_collected_ngn'), net_profit_ngn: n('net_profit_ngn'), tx_count: n('tx_count'),
+    ...('cogs_ngn' in r ? { cogs_ngn: n('cogs_ngn'), gross_profit_ngn: n('gross_profit_ngn'), unpriced_revenue_ngn: n('unpriced_revenue_ngn') } : {}),
   };
 }
 

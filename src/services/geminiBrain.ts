@@ -23,7 +23,7 @@ export const TxnLineSchema = z.object({
   amount_paid_ngn: Naira.describe('Money actually received (sale/debt_repayment) or paid out (expense/restock) now. For "transfer 30k balance 20k" on a 50k sale this is 30000.'),
   payment_method: z.enum(['cash', 'transfer', 'pos', 'credit', 'unknown']),
   customer_name: z.string().optional().describe('Who bought / who owes / who paid. Required when amount_paid_ngn < amount_ngn on a sale.'),
-  category: z.enum(['Fuel/Diesel', 'Logistics/Dispatch', 'Rent/Utilities', 'Salaries', 'Data/Airtime', 'Packaging', 'Marketing', 'Food', 'Other']).optional().describe('Expense category (expenses only).'),
+  category: z.enum(['Fuel/Diesel', 'Logistics/Dispatch', 'Rent/Utilities', 'Salaries', 'Data/Airtime', 'Packaging', 'Marketing', 'Food', 'Bank/POS charges', 'Repairs', 'Taxes/Levies', 'Other']).optional().describe('Expense category (expenses only).'),
 });
 export type TxnLine = z.infer<typeof TxnLineSchema>;
 

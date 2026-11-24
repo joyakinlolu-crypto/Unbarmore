@@ -467,7 +467,7 @@ function plansMenu(actor: Actor): Reply {
 async function onButton(actor: Actor, id: string, session: Session): Promise<Reply | null> {
   const [kind, a, b2] = id.split(':');
   switch (kind) {
-    case 'TXC': return confirmAndRespond(actor, a!);
+    case 'TXC': return confirmAndRespond(actor, a!, async (pid) => (await redis.set(`costask:${pid}`, '1', 'EX', 3 * 86_400, 'NX')) === 'OK');
     case 'TXE':
       await setSession(actor.phone, 'AWAITING_TX_EDIT', { batch_id: a });
       return reply(actor.phone).text('✏️ Send the correct version (text or voice note) and I\'ll replace it.');

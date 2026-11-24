@@ -146,7 +146,7 @@ async function sundayCeo(): Promise<void> {
         await sendTemplate(biz.owner_phone, env.WHATSAPP_CEO_TEMPLATE, reportTemplateParams(biz, rep), [], token);
       }
       // Also ping the app (free). A failure here must never undo or repeat the WhatsApp send above.
-      await sendPushToBusiness(biz.id, { title: `${biz.name}: your weekly report is ready`, body: `Net profit ${ngn(rep.netProfit)} · sales ${ngn(rep.revenue)}`, url: '/dashboard', tag: 'weekly' }).catch(() => 0);
+      await sendPushToBusiness(biz.id, { title: `${biz.name}: your weekly report is ready`, body: `${rep.trueProfit ? 'Profit' : 'Cash left'} ${rep.unpriced > 0 ? 'up to ' : ''}${ngn(rep.netProfit)} · sales ${ngn(rep.revenue)}`, url: '/dashboard', tag: 'weekly' }).catch(() => 0);
     } catch (err) {
       console.error('[cron:sunday-ceo]', biz.id, err);
     }

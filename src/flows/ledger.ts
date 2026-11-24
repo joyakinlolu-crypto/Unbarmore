@@ -117,7 +117,11 @@ export function lowStockLines(before: Map<string, StockSnap>, after: Map<string,
 }
 
 /** Step 2: confirm → apply → ONE reply carrying receipt PDF + today's profit (+ margin shield if a restock got dearer). */
-export async function confirmAndRespond(actor: Actor, batchId: string): Promise<Reply> {
+/**
+ * `askCostOnce(productId)`: returns true the first time we should ask about this product (the caller rate-limits it, e.g. once per 3 days).
+ * Without a cost price a sale's profit is unknown, so after selling an item with no cost price we ask for it.
+ */
+export async function confirmAndRespond(actor: Actor, batchId: string, askCostOnce?: (productId: string) => Promise<boolean>): Promise<Reply> {
   const before = await getBatchRows(batchId);
   if (!before.length || before[0]!.business_id !== actor.business.id) return reply(actor.phone).text('That entry has expired. Send it again.');
   if (before.every((t) => t.status !== 'pending_confirm')) {
@@ -163,8 +167,19 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
   }
 
   // Low stock after this sale?
-  const lows = lowStockLines(stockBefore, await stockSnapshot(rows));
+  const stockAfter = await stockSnapshot(rows);
+  const lows = lowStockLines(stockBefore, stockAfter);
   if (lows.length) r.text('', ...lows);
+
+  // Profit needs the cost price. Ask (rarely) for items sold without one.
+  if (askCostOnce) {
+    const unknown: string[] = [];
+    for (const [id, p] of stockAfter) if (p.cost <= 0 && (await askCostOnce(id).catch(() => false))) unknown.push(p.name);
+    if (unknown.length) {
+      const list = unknown.slice(0, 2).map((n) => `*${n}*`).join(' and ');
+      r.text('', `💡 What ${unknown.length > 1 ? 'do' : 'does'} ${list} cost you? Say _${unknown[0]!.toLowerCase()} costs me 15k_ and I'll show your real profit, not just your sales.`);
+    }
+  }
 
   // Customer receipt is on demand (button / RECEIPT): saves the free-plan PDF quota and keeps this reply fast.
   const hasReceipt = rows.some((t) => t.tx_type === 'sale' || t.tx_type === 'debt_repayment');

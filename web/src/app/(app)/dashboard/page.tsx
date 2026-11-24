@@ -5,6 +5,7 @@ import { requireSession } from '@/lib/auth';
 import { ngn, waLink, watDate, watDayStart, watMonthStart } from '@/lib/format';
 import { db } from '@/lib/supabase';
 import { onboardingSteps } from '@/lib/progress';
+import { profitFromRow, profitLabel, profitPhrase } from '@/lib/profit';
 import { botNumber } from '@/lib/whatsapp';
 
 export const metadata = { title: 'Overview' };
@@ -27,15 +28,13 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     db.rpc('ledger_summary', { p_business_id: b.id, p_from: '2000-01-01T00:00:00Z', p_to: to }),
   ]);
   const s = ((sum.data as Record<string, string>[] | null)?.[0]) ?? {};
-  const revenue = Number(s.revenue_ngn ?? 0);
-  const spend = Number(s.expenses_ngn ?? 0) + Number(s.restock_ngn ?? 0);
-  const net = Number(s.net_profit_ngn ?? 0);
-  const margin = revenue > 0 ? Math.round((net / revenue) * 100) : 0;
+  const pv = profitFromRow(s);
+  const revenue = pv.revenue;
   const owed = (debt.data ?? []).reduce((a, d) => a + Number(d.outstanding_debt_ngn), 0);
   const t = ((today.data as Record<string, string>[] | null)?.[0]) ?? {};
+  const tv = profitFromRow(t);
   const todayIn = Number(t.cash_in_ngn ?? 0);
-  const todaySpent = Number(t.expenses_ngn ?? 0) + Number(t.restock_ngn ?? 0);
-  const todayNet = Number(t.net_profit_ngn ?? 0);
+  const todayCosts = tv.basis === 'true' ? tv.cogs + tv.running : tv.running + tv.stockBought;
   const todayCount = Number(t.tx_count ?? 0);
   const collectedEver = Number(((allTime.data as Record<string, string>[] | null)?.[0] ?? {}).debt_collected_ngn ?? 0);
   const protectedMargin = Number(b.total_value_recovered_ngn);
@@ -89,8 +88,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         {todayCount > 0 ? (
           <div className="grid grid-cols-3 gap-2 text-center">
             <div><p className="text-xs text-slate-500">Money in</p><p className="font-bold text-profit">{ngn(todayIn)}</p></div>
-            <div><p className="text-xs text-slate-500">Spent</p><p className="font-bold text-alert">{ngn(todaySpent)}</p></div>
-            <div><p className="text-xs text-slate-500">Profit</p><p className={`font-bold ${todayNet >= 0 ? 'text-profit' : 'text-alert'}`}>{ngn(todayNet)}</p></div>
+            <div><p className="text-xs text-slate-500">{tv.basis === 'true' ? 'Costs' : 'Spent'}</p><p className="font-bold text-alert">{ngn(todayCosts)}</p></div>
+            <div><p className="text-xs text-slate-500">{profitLabel(tv)}</p><p className={`font-bold ${tv.profit >= 0 ? 'text-profit' : 'text-alert'}`}>{profitPhrase(tv)}</p></div>
           </div>
         ) : (
           <p className="text-sm text-slate-500">Nothing logged yet today. Sold something? A quick voice note is enough.</p>
@@ -109,14 +108,32 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
 
       <section className="grid grid-cols-2 gap-3" aria-label="This month">
         <Kpi label="Sales this month" value={ngn(revenue)} />
-        <Kpi label="Expenses + stock" value={ngn(spend)} tone="alert" />
-        <Kpi label="Net profit" value={ngn(net)} sub={revenue > 0 ? `${margin}% margin` : undefined} tone={net >= 0 ? 'profit' : 'alert'} />
+        <Kpi label={`${profitLabel(pv)} this month`} value={profitPhrase(pv)} sub={pv.basis === 'true' ? (pv.marginPct !== null ? `${pv.marginPct}% of sales` : undefined) : 'sales − expenses − stock bought'} tone={pv.profit >= 0 ? 'profit' : 'alert'} />
+        {pv.basis === 'true' ? (
+          <>
+            <Kpi label="Cost of what you sold" value={ngn(pv.cogs)} sub="what the items cost you" tone="alert" />
+            <Kpi label="Running costs" value={ngn(pv.running)} sub="rent, fuel, staff…" tone="alert" />
+          </>
+        ) : (
+          <>
+            <Kpi label="Expenses" value={ngn(pv.running)} tone="alert" />
+            <Kpi label="Stock bought" value={ngn(pv.stockBought)} sub="money out, not a cost" />
+          </>
+        )}
         <Kpi label="Customers owe you" value={ngn(owed)} sub={owed > 0 ? `${debt.data?.length} customer${debt.data?.length === 1 ? '' : 's'}` : 'All paid 🎉'} href="/ledger?tab=debtors" />
+        {pv.basis === 'true' && <Kpi label="Stock bought" value={ngn(pv.stockBought)} sub="on your shelf, not a cost" />}
       </section>
+      {pv.incomplete && (
+        <p className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-900" role="note">
+          ⚠️ {ngn(pv.unpriced)} of your sales have no cost price yet, so your real profit is lower than shown.{' '}
+          <a href={waLink(bot, 'lace costs me 15k')} target="_blank" rel="noopener" className="font-semibold underline">Tell me what each item costs</a> (like “lace costs me 15k”).
+        </p>
+      )}
+      {pv.basis === 'cash' && <p className="text-center text-xs text-slate-400">Until cost prices are set up, this shows cash left (sales − expenses − stock bought), not profit.</p>}
 
       <section className="rounded-3xl border border-slate-100 p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold">Sales vs spending</h2>
+          <h2 className="font-semibold">Sales vs money spent</h2>
           <div className="flex rounded-full bg-mist p-0.5 text-xs font-medium">
             <Link href="/dashboard" className={`rounded-full px-3 py-1 ${!weekly ? 'bg-white shadow-sm' : 'text-slate-500'}`}>30 days</Link>
             <Link href="/dashboard?range=12w" className={`rounded-full px-3 py-1 ${weekly ? 'bg-white shadow-sm' : 'text-slate-500'}`}>12 weeks</Link>
@@ -139,7 +156,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </section>
       )}
 
-      {revenue === 0 && spend === 0 && (
+      {revenue === 0 && pv.running + pv.stockBought === 0 && (
         <p className="rounded-2xl bg-mist p-4 text-center text-sm text-slate-500">Nothing logged this month yet. Send a voice note on WhatsApp — e.g. “sold 2 lace 50k cash”.</p>
       )}
       <p className="text-center text-xs text-slate-400">Month to date · updated {watDate(now.toISOString())}</p>

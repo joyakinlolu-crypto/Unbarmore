@@ -1,5 +1,6 @@
 import { debtors, ledgerSummary, type Business } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
+import { profitLabel, profitPhrase, profitView } from '../lib/profit.js';
 import type { PushPayload } from '../services/push.js';
 import { daysSince, periodRange } from './insights.js';
 
@@ -15,7 +16,8 @@ export async function buildDailyPush(biz: Business): Promise<PushPayload> {
   const base = { url: '/dashboard', tag: 'daily' };
 
   if (s.tx_count > 0) {
-    const bits = [`Sales ${ngn(s.revenue_ngn)}`, `Spent ${ngn(s.expenses_ngn + s.restock_ngn)}`, `Profit ${ngn(s.net_profit_ngn)}`];
+    const v = profitView(s);
+    const bits = [`Sales ${ngn(s.revenue_ngn)}`, v.basis === 'true' ? `Costs ${ngn(v.cogs + v.running)}` : `Spent ${ngn(v.running + v.stockBought)}`, `${profitLabel(v)} ${profitPhrase(v)}`];
     if (s.debt_collected_ngn > 0) bits.unshift(`🎉 ${ngn(s.debt_collected_ngn)} collected`);
     if (owed > 0) bits.push(`${ngn(owed)} still owed to you`);
     return { ...base, title: `${biz.name}: today in numbers`, body: bits.join(' · ') };

@@ -30,6 +30,10 @@ async function cleanup() {
   for (const b of data ?? []) await db.from('businesses').delete().eq('id', b.id); // cascades users, txns, customers, tokens, chat
 }
 
+// Is the database upgraded to TRUE profit (migration 005)? Then the screens show cost of goods and real profit; before it they honestly say "cash left".
+const probe = await db.rpc('ledger_summary', { p_business_id: '00000000-0000-0000-0000-000000000000', p_from: '2000-01-01', p_to: '2100-01-01' });
+const migrated = !!probe.data && probe.data[0] !== undefined && 'cogs_ngn' in probe.data[0];
+console.log(`ℹ️  database has migration 005 (true profit): ${migrated ? 'YES' : 'no, checking the honest "cash left" screens'}`);
 let browser: any;
 try {
   await cleanup();
@@ -78,13 +82,17 @@ try {
   const dTxt = text(await d.text());
   ok('/dashboard → 200 with the business name', d.status === 200 && dTxt.includes('E2E Test Fabrics'));
   ok('Sales this month ₦200,000', /Sales this month ₦200,000/.test(dTxt));
-  ok('Expenses + stock ₦80,000', /Expenses \+ stock ₦80,000/.test(dTxt));
-  ok('Net profit ₦120,000 at 60% margin', /Net profit ₦120,000 60% margin/.test(dTxt));
+  if (migrated) {
+    // seeded sale (10 × Swiss Lace, ₦200k) has no cost price yet: profit is "up to" and the screen says why
+    ok('TRUE profit, unknown cost: "Profit this month up to ₦120,000" + the "no cost price yet" warning', /Profit this month up to ₦120,000/.test(dTxt) && /₦200,000 of your sales have no cost price yet/.test(dTxt) && /Running costs ₦80,000/.test(dTxt), (dTxt.match(/Profit this month.{0,80}/) ?? [''])[0]);
+  } else {
+    ok('before migration 005 the screen says "Cash left" (sales − expenses − stock), never "Profit"', /Cash left this month ₦120,000/.test(dTxt) && /Expenses ₦80,000/.test(dTxt) && !/Profit this month/.test(dTxt), (dTxt.match(/Cash left this month.{0,60}/) ?? [''])[0]);
+  }
   ok('Customers owe you ₦95,000 (1 customer)', /Customers owe you ₦95,000 1 customer/.test(dTxt));
   ok('expense breakdown lists Fuel/Diesel ₦60,000 and Rent ₦20,000', dTxt.includes('Fuel/Diesel') && dTxt.includes('₦60,000') && dTxt.includes('Rent/Utilities') && dTxt.includes('₦20,000'));
   ok('plan badge shows Free trial', dTxt.includes('Free trial'));
   ok('dashboard has a "Today" card: money in / spent / profit for today, top debtor, and a WhatsApp chase button',
-    /Today Money in ₦105,000 Spent ₦80,000 Profit ₦120,000/.test(dTxt) && /Still owing you Mama Tunde ₦95,000/.test(dTxt) && /Chase them on WhatsApp/.test(dTxt) && /Log a sale on WhatsApp/.test(dTxt),
+    (migrated ? /Today Money in ₦105,000 Costs ₦80,000 Profit up to ₦120,000/ : /Today Money in ₦105,000 Spent ₦80,000 Cash left ₦120,000/).test(dTxt) && /Still owing you Mama Tunde ₦95,000/.test(dTxt) && /Chase them on WhatsApp/.test(dTxt) && /Log a sale on WhatsApp/.test(dTxt),
     (dTxt.match(/Today .{0,140}/) ?? [''])[0]);
   ok('dashboard headline: nothing collected yet → invites the first chase (no fake number)', /Chase your first debt/.test(dTxt) && !/Money Unbarmore got back for you ₦/.test(dTxt));
   await db.from('transactions').insert(row({ tx_type: 'debt_repayment', description: 'Debt repayment — Mama Tunde', category: 'Debt Repayment', total_amount_ngn: 30000, amount_paid_ngn: 30000, payment_method: 'transfer', customer_id: cust!.id }));
@@ -92,6 +100,17 @@ try {
   const dTxt2 = text(await (await fetch(`${BASE}/dashboard`, { headers: { cookie } })).text());
   ok('after ₦30,000 collected + ₦16,000 margin protected: headline shows ₦46,000 with both parts', /Money Unbarmore got back for you ₦46,000 ₦30,000 collected from customers \+ ₦16,000 margin protected/.test(dTxt2), (dTxt2.match(/Money Unbarmore got back.{0,120}/) ?? [''])[0]);
   await db.from('businesses').update({ total_value_recovered_ngn: 0 }).eq('id', bid);
+
+  if (migrated) {
+    // the owner tells us lace costs ₦8k: the sale remembers it, and profit becomes REAL: 200k − 80k goods − 80k costs = 40k
+    await db.from('transactions').update({ unit_cost_ngn: 8000 }).eq('business_id', bid).ilike('description', '%Swiss Lace%');
+    const pTxt = text(await (await fetch(`${BASE}/dashboard`, { headers: { cookie } })).text());
+    ok('with the cost price known: "Profit this month ₦40,000", "20% of sales", "Cost of what you sold ₦80,000", and no warning', /Profit this month ₦40,000 20% of sales/.test(pTxt) && /Cost of what you sold ₦80,000/.test(pTxt) && !/have no cost price yet/.test(pTxt), (pTxt.match(/Profit this month.{0,60}/) ?? [''])[0]);
+    const cTxt0 = text(await (await fetch(`${BASE}/charts`, { headers: { cookie } })).text());
+    ok('Charts: "You made ₦40,000: sales ₦200,000, minus what the goods cost ₦80,000, minus running costs ₦80,000"', /You made ₦40,000: sales ₦200,000, minus what the goods cost ₦80,000, minus running costs ₦80,000/.test(cTxt0), (cTxt0.match(/You made.{0,120}/) ?? [''])[0]);
+    const exp = await fetch(`${BASE}/api/export`, { headers: { cookie } });
+    ok('the PDF statement still builds with the new profit lines', exp.status === 200 && Buffer.from(await exp.arrayBuffer()).subarray(0, 4).toString() === '%PDF');
+  }
 
   // ───────── Charts page, Customers tab, Getting-started card ─────────
   const cRes = await fetch(`${BASE}/charts`, { headers: { cookie } });
@@ -106,7 +125,7 @@ try {
   const cu = text(await (await fetch(`${BASE}/ledger?tab=customers`, { headers: { cookie } })).text());
   ok('/ledger?tab=customers lists Mama Tunde with what she owes and a WhatsApp button', cu.includes('Mama Tunde') && cu.includes('owes ₦95,000'));
   const dTxt3 = text(await (await fetch(`${BASE}/dashboard`, { headers: { cookie } })).text());
-  ok('new account sees "Getting started: 2 of 5 done" (sale logged + debt recorded) with the next steps', /Getting started: 2 of 5 done/.test(dTxt3) && /Make a customer receipt/.test(dTxt3));
+  ok('new account sees "Getting started: 2 of 6 done" (sale logged + debt recorded) with the next steps', /Getting started: 2 of 6 done/.test(dTxt3) && /Make a customer receipt/.test(dTxt3));
 
   // ───────── evening alerts (web push) ─────────
   const subBody = { endpoint: 'https://fcm.googleapis.com/fcm/send/e2e-test-device', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };

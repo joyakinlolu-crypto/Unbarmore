@@ -131,3 +131,11 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - **Onboarding**: 3-step welcome, `START` = "how it works" + a live checklist (first entry · who owes you · receipt · evening alert · video) detected from real activity; the web dashboard shows the same card for the first 30 days, and the 9 PM check-in nudges new accounts with the next step.
 - **Charts** (web → Charts tab): sales & profit trend, vs previous period, best days, best sellers, best customers, how you get paid, where money goes, debt age, stock health. Each has a plain-language takeaway and an "Ask your advisor" link that pre-fills the question.
 - Speech: if every speech model is busy, the voice retries (3 rounds) before the video falls back to music-only.
+
+## True profit (migration `005_true_profit.sql`)
+- **profit = sales − cost of the goods sold − running costs.** Stock *bought* is shown separately (it is on the shelf, not a cost). Before this, "profit" was sales − (expenses + stock bought): selling old stock looked like 100% profit and buying stock looked like a loss.
+- Every sale remembers the item's cost price at the moment of sale (`transactions.unit_cost_ngn`, frozen: later cost changes never rewrite old sales). Old sales are back-filled with the current cost.
+- Items with no cost price: the owner is asked once ("What does Lace cost you? Say _lace costs me 15k_"), profit is shown as **"up to ₦X"** and the screen says how much of the sales have no cost price. `START` has a "tell me what your items cost" step.
+- Until migration 005 is run, every screen, message and PDF says **"Cash left"** (sales − expenses − stock bought), never "profit". Code reads the new columns only if they exist.
+- SQL test: `psql -v ON_ERROR_STOP=1 -f supabase/tests/005_profit_test.sql` on a scratch database with 001–005 (sales 210k − goods 150k − rent 10k = 50k with 150k stock bought kept out; unknown costs flagged; cost frozen at sale; undo; no public access).
+- New expense categories: Bank/POS charges, Repairs, Taxes/Levies.

@@ -142,6 +142,25 @@ describe('confirmation message: receipt button + low-stock', () => {
     expect(t).toContain('🎉 ₦5,000 collected');
     expect(t).not.toContain('got back');
   });
+  it('after selling an item with no cost price, asks once what it costs (so profit can be real)', async () => {
+    m.getBatchRows.mockResolvedValueOnce([row()]).mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    m.getProduct.mockResolvedValue({ id: 'p1', name: 'Swiss Lace', stock_qty: 9, cost_price_ngn: 0, selling_price_ngn: 25000 });
+    const ask = vi.fn().mockResolvedValueOnce(true);
+    const t = ((await confirmAndRespond(actor(), 'batch1', ask)).toPayload() as any).interactive.body.text as string;
+    expect(ask).toHaveBeenCalledWith('p1');
+    expect(t).toContain('What does *Swiss Lace* cost you?');
+    expect(t).toContain('swiss lace costs me 15k');
+  });
+  it('…but not again within the cooldown, and never when the cost price is already known', async () => {
+    m.getBatchRows.mockResolvedValueOnce([row()]).mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    m.getProduct.mockResolvedValue({ id: 'p1', name: 'Swiss Lace', stock_qty: 9, cost_price_ngn: 0, selling_price_ngn: 25000 });
+    expect(((await confirmAndRespond(actor(), 'batch1', async () => false)).toPayload() as any).interactive.body.text).not.toContain('cost you');
+    m.getBatchRows.mockResolvedValueOnce([row()]).mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    m.getProduct.mockResolvedValue({ id: 'p1', name: 'Swiss Lace', stock_qty: 9, cost_price_ngn: 15000, selling_price_ngn: 25000 });
+    const ask = vi.fn().mockResolvedValue(true);
+    expect(((await confirmAndRespond(actor(), 'batch1', ask)).toPayload() as any).interactive.body.text).not.toContain('cost you');
+    expect(ask).not.toHaveBeenCalled();
+  });
   it('an expense-only entry has no receipt button', async () => {
     const e = row({ tx_type: 'expense', product_id: null, customer_id: null, customers: null, description: 'Fuel' });
     m.getBatchRows.mockResolvedValueOnce([e]).mockResolvedValueOnce([{ ...e, status: 'confirmed' }]);

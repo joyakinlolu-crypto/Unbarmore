@@ -7,7 +7,7 @@ const DAY = 86_400_000;
 
 export interface Tx {
   tx_type: 'sale' | 'expense' | 'restock' | 'debt_repayment';
-  category: string | null; description: string; total_amount_ngn: number | string; amount_paid_ngn: number | string;
+  category: string | null; description: string; quantity?: number | string; unit_cost_ngn?: number | string | null; total_amount_ngn: number | string; amount_paid_ngn: number | string;
   payment_method: string | null; transaction_date: string;
   customers: { name: string } | null; products: { name: string } | null;
 }
@@ -19,14 +19,17 @@ const n = (v: number | string | null | undefined) => Number(v ?? 0);
 export const watDay = (iso: string | Date) => new Date((typeof iso === 'string' ? new Date(iso) : iso).getTime() + WAT).toISOString().slice(0, 10);
 const label = (day: string) => new Date(day + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
-export interface Totals { revenue: number; spend: number; profit: number }
+/** profit = sales − cost of the goods sold − running costs. Stock bought is kept out of profit (it is on the shelf). */
+export interface Totals { revenue: number; cogs: number; running: number; stockBought: number; spend: number; profit: number; unpriced: number }
+const cogsOf = (t: Tx) => (t.unit_cost_ngn !== null && t.unit_cost_ngn !== undefined ? n(t.quantity ?? 1) * n(t.unit_cost_ngn) : 0);
 export function totals(rows: Tx[]): Totals {
-  let revenue = 0, spend = 0;
+  let revenue = 0, cogs = 0, running = 0, stockBought = 0, unpriced = 0;
   for (const t of rows) {
-    if (t.tx_type === 'sale') revenue += n(t.total_amount_ngn);
-    else if (t.tx_type === 'expense' || t.tx_type === 'restock') spend += n(t.total_amount_ngn);
+    if (t.tx_type === 'sale') { revenue += n(t.total_amount_ngn); cogs += cogsOf(t); if (t.unit_cost_ngn === null || t.unit_cost_ngn === undefined) unpriced += n(t.total_amount_ngn); }
+    else if (t.tx_type === 'expense') running += n(t.total_amount_ngn);
+    else if (t.tx_type === 'restock') stockBought += n(t.total_amount_ngn);
   }
-  return { revenue, spend, profit: revenue - spend };
+  return { revenue, cogs, running, stockBought, spend: cogs + running, profit: revenue - cogs - running, unpriced };
 }
 
 export interface TrendPoint { label: string; revenue: number; spend: number; profit: number }
@@ -35,8 +38,8 @@ export function trend(rows: Tx[], from: Date, days: number): TrendPoint[] {
   const per = new Map<string, { revenue: number; spend: number }>();
   for (const t of rows) {
     const k = watDay(t.transaction_date); const e = per.get(k) ?? { revenue: 0, spend: 0 };
-    if (t.tx_type === 'sale') e.revenue += n(t.total_amount_ngn);
-    else if (t.tx_type === 'expense' || t.tx_type === 'restock') e.spend += n(t.total_amount_ngn);
+    if (t.tx_type === 'sale') { e.revenue += n(t.total_amount_ngn); e.spend += cogsOf(t); }   // cost of what was sold that day
+    else if (t.tx_type === 'expense') e.spend += n(t.total_amount_ngn);                          // running costs; stock bought is NOT a cost
     per.set(k, e);
   }
   const keys = Array.from({ length: days }, (_, i) => watDay(new Date(from.getTime() + i * DAY)));
@@ -96,7 +99,7 @@ export function expenseBreakdown(rows: Tx[], k = 7): Bar[] {
   const m = new Map<string, { v: number; c: number }>();
   for (const t of rows) {
     if (t.tx_type !== 'expense' && t.tx_type !== 'restock') continue;
-    const name = t.tx_type === 'restock' ? 'Stock bought' : (t.category || 'Other'); const e = m.get(name) ?? { v: 0, c: 0 }; e.v += n(t.total_amount_ngn); e.c++; m.set(name, e);
+    const name = t.tx_type === 'restock' ? 'Stock bought (not a cost)' : (t.category || 'Other'); const e = m.get(name) ?? { v: 0, c: 0 }; e.v += n(t.total_amount_ngn); e.c++; m.set(name, e);
   }
   return topN(m, k);
 }
@@ -123,9 +126,10 @@ const money = (v: number) => '₦' + Math.round(v).toLocaleString('en-NG');
 const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : 0);
 
 export function trendInsight(t: Totals, pts: TrendPoint[], daily: boolean): string {
-  if (t.revenue === 0 && t.spend === 0) return 'Nothing recorded in this period yet.';
+  if (t.revenue === 0 && t.running === 0 && t.stockBought === 0) return 'Nothing recorded in this period yet.';
   const best = [...pts].sort((a, b) => b.profit - a.profit)[0]!;
-  return `${t.profit >= 0 ? 'You made' : 'You lost'} ${money(Math.abs(t.profit))} (${money(t.revenue)} in, ${money(t.spend)} out). Best ${daily ? 'day' : 'week'}: ${best.label} at ${money(best.profit)}.`;
+  const pre = t.unpriced > 0 ? 'Up to ' : '';
+  return `${pre}${t.profit >= 0 ? (pre ? 'a profit of' : 'You made') : 'You lost'} ${money(Math.abs(t.profit))}: sales ${money(t.revenue)}, minus what the goods cost ${money(t.cogs)}, minus running costs ${money(t.running)}. Best ${daily ? 'day' : 'week'}: ${best.label}.${t.unpriced > 0 ? ` (${money(t.unpriced)} of sales have no cost price yet, so the real profit is lower.)` : ''}`;
 }
 export function weekdayInsight(bars: Bar[]): string {
   const total = bars.reduce((a, b) => a + b.value, 0); if (!total) return 'No sales in this period yet.';
@@ -147,8 +151,9 @@ export function paymentInsight(s: Slice[]): string {
   return `${top ? `${top.label} is ${pct(top.value, total)}% of the flow. ` : ''}${credit > 0 ? `${money(credit)} of new sales went out on credit: follow it up.` : 'Nothing new went out on credit.'}`;
 }
 export function expenseInsight(bars: Bar[]): string {
-  const total = bars.reduce((a, b) => a + b.value, 0); if (!total) return 'No expenses in this period yet.';
-  return `${bars[0]!.label} is your biggest cost: ${money(bars[0]!.value)} (${pct(bars[0]!.value, total)}% of spending).`;
+  const costs = bars.filter((b) => !b.label.startsWith('Stock bought'));   // buying stock is not a cost
+  const total = costs.reduce((a, b) => a + b.value, 0); if (!total) return bars.length ? 'No running costs in this period. The stock you bought is on your shelf, not a cost.' : 'No expenses in this period yet.';
+  return `${costs[0]!.label} is your biggest cost: ${money(costs[0]!.value)} (${pct(costs[0]!.value, total)}% of your running costs).`;
 }
 export function agingInsight(bars: Bar[]): string {
   const total = bars.reduce((a, b) => a + b.value, 0); if (!total) return 'Nobody owes you money.';

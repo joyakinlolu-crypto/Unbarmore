@@ -5,6 +5,7 @@ import {
   db, debtors, deadStock, expensesByCategory, ledgerSummary, lowStock, topProducts, type Business,
 } from '../db/supabase.js';
 import { ngn, watDayStart } from '../lib/money.js';
+import { dayLine, profitBlock } from '../lib/profit.js';
 
 export type Period = 'today' | 'yesterday' | 'this_week' | 'last_week' | 'this_month' | 'last_month';
 
@@ -38,7 +39,7 @@ export const daysSince = (iso: string | null) => (iso ? Math.max(0, Math.floor((
 export async function todayLine(businessId: string): Promise<string> {
   const { from, to } = periodRange('today');
   const s = await ledgerSummary(businessId, from, to);
-  return `📊 Today: Sales ${ngn(s.revenue_ngn)} · Spent ${ngn(s.expenses_ngn + s.restock_ngn)} · Profit *${ngn(s.net_profit_ngn)}*`;
+  return dayLine(s);
 }
 
 export async function answerQuery(
@@ -53,14 +54,7 @@ export async function answerQuery(
     case 'cash_today': {
       const s = await ledgerSummary(b.id, from, to);
       if (s.tx_count === 0) return `No confirmed records ${label} yet. Send a voice note like "sold 2 lace 50k" to start.`;
-      return [
-        `*${b.name} — ${label}*`,
-        `Sales: ${ngn(s.revenue_ngn)}`,
-        `Expenses: ${ngn(s.expenses_ngn)}`,
-        `Stock bought: ${ngn(s.restock_ngn)}`,
-        `*Net profit: ${ngn(s.net_profit_ngn)}*`,
-        `Cash/transfer received: ${ngn(s.cash_in_ngn)}${s.debt_collected_ngn ? ` (incl. ${ngn(s.debt_collected_ngn)} old debts)` : ''}`,
-      ].join('\n');
+      return profitBlock(`${b.name}: ${label}`, s).join('\n');
     }
     case 'debtors': {
       if (q.customer_name) {

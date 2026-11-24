@@ -23,13 +23,17 @@ export default async function Charts({ searchParams }: { searchParams: Promise<{
   const prevFrom = new Date(from.getTime() - range * DAY);
   const to = new Date(Date.now() + DAY);
 
-  const [txRes, debtRes, prodRes] = await Promise.all([
-    db.from('transactions').select('tx_type, category, description, total_amount_ngn, amount_paid_ngn, payment_method, transaction_date, customers(name), products(name)')
-      .eq('business_id', b.id).eq('status', 'confirmed').gte('transaction_date', prevFrom.toISOString()).lt('transaction_date', to.toISOString())
-      .order('transaction_date', { ascending: false }).limit(5000),
+  const txQuery = (cols: string) => db.from('transactions').select(cols)
+    .eq('business_id', b.id).eq('status', 'confirmed').gte('transaction_date', prevFrom.toISOString()).lt('transaction_date', to.toISOString())
+    .order('transaction_date', { ascending: false }).limit(5000);
+  const COLS = 'tx_type, category, description, quantity, total_amount_ngn, amount_paid_ngn, payment_method, transaction_date, customers(name), products(name)';
+  let [txRes, debtRes, prodRes] = await Promise.all([
+    txQuery(`${COLS}, unit_cost_ngn`),
     db.from('customers').select('name, outstanding_debt_ngn, debt_since').eq('business_id', b.id).gt('outstanding_debt_ngn', 0).limit(2000),
     db.from('products').select('name, stock_qty, cost_price_ngn, last_sold_at').eq('business_id', b.id).limit(1000),
   ]);
+  // Database not upgraded yet (no cost column): show the charts anyway; every sale then counts as "cost price unknown".
+  if (txRes.error) txRes = await txQuery(COLS);
   const all = (txRes.data ?? []) as unknown as Tx[];
   const cur = all.filter((t) => new Date(t.transaction_date) >= from);
   const prev = all.filter((t) => new Date(t.transaction_date) < from);
@@ -58,13 +62,13 @@ export default async function Charts({ searchParams }: { searchParams: Promise<{
 
       <Card title="Sales and profit" insight={trendInsight(t, points, range <= 31)} ask={`Look at my last ${range} days of sales and profit. What is working and what should I change?`}><TrendLine points={points} /></Card>
       <Card title="This period vs the one before" insight={compareInsight(t, tp)} ask="Why did my sales or profit change compared with the period before? What should I do next?">
-        <Compare rows={[{ label: 'Sales', cur: t.revenue, prev: tp.revenue }, { label: 'Spending', cur: t.spend, prev: tp.spend }, { label: 'Profit', cur: t.profit, prev: tp.profit }]} />
+        <Compare rows={[{ label: 'Sales', cur: t.revenue, prev: tp.revenue }, { label: 'Costs (goods sold + running)', cur: t.spend, prev: tp.spend }, { label: t.unpriced > 0 ? 'Profit (up to)' : 'Profit', cur: t.profit, prev: tp.profit }]} />
       </Card>
       <Card title="Your best days" insight={weekdayInsight(days)} ask="Which days are my slowest, and what promo should I run to fill them?"><Columns rows={days} label="Sales by day of the week" /></Card>
       <Card title="Best sellers" insight={productInsight(prods, t.revenue)} ask="Which of my products should I push harder and which should I stop stocking?"><HBars rows={prods} label="Top products by sales" /></Card>
       <Card title="Best customers" insight={customerInsight(custs, t.revenue)} ask="How do I get my best customers to buy more and bring their friends?"><HBars rows={custs} color="#16A34A" label="Top customers by spend" /></Card>
       <Card title="How you get paid" insight={paymentInsight(pay)} ask="How can I reduce credit sales and get paid faster?"><Stack slices={pay} label="Share of money received by payment method" /></Card>
-      <Card title="Where your money goes" insight={expenseInsight(exp)} ask="Where am I overspending, and where can I cut costs without hurting sales?"><HBars rows={exp} color="#E11D48" label="Spending by category" /></Card>
+      <Card title="Where your money goes (cash out)" insight={expenseInsight(exp)} ask="Where am I overspending, and where can I cut costs without hurting sales?"><HBars rows={exp} color="#E11D48" label="Spending by category" /></Card>
       <Card title="Who owes you, and for how long" insight={agingInsight(aging)} ask="Write me a plan to collect the money customers owe me, starting with the oldest."><HBars rows={aging} color="#F59E0B" label="Money owed by age" /></Card>
 
       <section className="rounded-3xl border border-slate-100 p-4 shadow-sm">

@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
 
   const pdf = await monthlyStatementPdf({
     businessName: session.business.name, rcNumber: session.business.rc_number, monthLabel: label,
-    revenue: n('revenue_ngn'), expenses: n('expenses_ngn'), restock: n('restock_ngn'), netProfit: n('net_profit_ngn'),
+    revenue: n('revenue_ngn'), expenses: n('expenses_ngn'), restock: n('restock_ngn'), netProfit: 'cogs_ngn' in s ? n('net_profit_ngn') : n('revenue_ngn') - n('expenses_ngn') - n('restock_ngn'),
+    ...('cogs_ngn' in s ? { cogs: n('cogs_ngn'), unpriced: n('unpriced_revenue_ngn') } : {}),
     cashIn: n('cash_in_ngn'), debtCollected: n('debt_collected_ngn'),
     categories: ((cats.data ?? []) as { category: string; amount_ngn: string }[]).map((c) => ({ category: c.category, amount: Number(c.amount_ngn) })),
     topProducts: ((top.data ?? []) as { name: string; qty: string; revenue_ngn: string }[]).map((p) => ({ name: p.name, qty: Number(p.qty), revenue: Number(p.revenue_ngn) })),

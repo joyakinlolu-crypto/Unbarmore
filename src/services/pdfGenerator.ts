@@ -175,6 +175,10 @@ export interface StatementInput {
   expenses: number;
   restock: number;
   netProfit: number;
+  /** Cost of goods sold; with trueProfit=false the netProfit is only cash left (older database). */
+  cogs?: number;
+  unpriced?: number;
+  trueProfit?: boolean;
   cashIn: number;
   debtCollected: number;
   expenseByCategory: { category: string; amount: number; changePct: number | null }[];
@@ -191,11 +195,18 @@ export function weeklyStatementPdf(s: StatementInput): Promise<Buffer> {
     const w = doc.page.width - x - doc.page.margins.right;
 
     // KPI tiles
-    const tiles: [string, number, string][] = [
-      ['Revenue', s.revenue, BRAND.ink],
-      ['Expenses + Stock', s.expenses + s.restock, BRAND.ink],
-      ['Net Profit', s.netProfit, s.netProfit >= 0 ? BRAND.green : BRAND.red],
-    ];
+    const real = s.trueProfit !== false && s.cogs !== undefined;
+    const tiles: [string, number, string][] = real
+      ? [
+          ['Sales', s.revenue, BRAND.ink],
+          ['Cost of goods + running costs', (s.cogs ?? 0) + s.expenses, BRAND.ink],
+          [(s.unpriced ?? 0) > 0 ? 'Profit (up to)' : 'Net Profit', s.netProfit, s.netProfit >= 0 ? BRAND.green : BRAND.red],
+        ]
+      : [
+          ['Revenue', s.revenue, BRAND.ink],
+          ['Expenses + Stock', s.expenses + s.restock, BRAND.ink],
+          ['Cash left (not profit)', s.netProfit, s.netProfit >= 0 ? BRAND.green : BRAND.red],
+        ];
     const tw = (w - 16) / 3;
     const ty = doc.y;
     tiles.forEach(([label, v, color], i) => {
@@ -204,8 +215,15 @@ export function weeklyStatementPdf(s: StatementInput): Promise<Buffer> {
       doc.font('reg').fontSize(8).fillColor(BRAND.muted).text(label.toUpperCase(), tx + 10, ty + 10, { width: tw - 20 });
       doc.font('bold').fontSize(16).fillColor(color).text(ngn(v), tx + 10, ty + 26, { width: tw - 20 });
     });
-    doc.y = ty + 72;
+    doc.y = ty + 66;
     doc.x = x;
+    doc.font('reg').fontSize(8).fillColor(BRAND.muted).text(
+      real
+        ? `Profit = sales − cost of the goods sold − running costs. Stock bought this period (${ngn(s.restock)}) is stock on the shelf, not a cost.${(s.unpriced ?? 0) > 0 ? ` ${ngn(s.unpriced ?? 0)} of sales have no cost price yet, so the real profit is lower.` : ''}`
+        : 'Cash left = sales − expenses − stock bought. Cost prices are not set up yet, so this is not true profit.',
+      x, doc.y, { width: w },
+    );
+    doc.moveDown(0.4);
 
     const section = (title: string) => {
       doc.moveDown(0.6);

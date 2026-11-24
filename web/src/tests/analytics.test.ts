@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agingInsight, compareInsight, debtAging, expenseBreakdown, paymentInsight, paymentMix, stockHealth, topCustomers, topProducts, totals, trend, watDay, weekdayInsight, weekdays, type Tx,
+  agingInsight, compareInsight, debtAging, expenseBreakdown, paymentInsight, paymentMix, stockHealth, topCustomers, topProducts, totals, trend, trendInsight, watDay, weekdayInsight, weekdays, type Tx,
 } from '@/lib/analytics';
 
 const DAY = 86_400_000;
@@ -12,23 +12,35 @@ const tx = (o: Partial<Tx> & { day: string }): Tx => ({
 }) as Tx;
 
 const rows: Tx[] = [
-  tx({ day: '2026-11-23', total_amount_ngn: 50000, amount_paid_ngn: 30000, payment_method: 'transfer', customers: { name: 'Mama Tunde' } }),   // Mon, 20k on credit
-  tx({ day: '2026-11-23', total_amount_ngn: 20000, amount_paid_ngn: 20000, products: { name: 'Gele' }, customers: { name: 'Bisi' } }),
-  tx({ day: '2026-11-28', total_amount_ngn: 100000, amount_paid_ngn: 100000, payment_method: 'pos', customers: { name: 'Mama Tunde' } }),     // Sat
+  tx({ day: '2026-11-23', quantity: 2, unit_cost_ngn: 15000, total_amount_ngn: 50000, amount_paid_ngn: 30000, payment_method: 'transfer', customers: { name: 'Mama Tunde' } }),   // Mon, 20k on credit, cost 30k
+  tx({ day: '2026-11-23', quantity: 1, unit_cost_ngn: 12000, total_amount_ngn: 20000, amount_paid_ngn: 20000, products: { name: 'Gele' }, customers: { name: 'Bisi' } }),       // cost 12k
+  tx({ day: '2026-11-28', quantity: 5, unit_cost_ngn: 8000, total_amount_ngn: 100000, amount_paid_ngn: 100000, payment_method: 'pos', customers: { name: 'Mama Tunde' } }),      // Sat, cost 40k
   tx({ day: '2026-11-24', tx_type: 'expense', category: 'Fuel/Diesel', total_amount_ngn: 15000, amount_paid_ngn: 15000, products: null }),
   tx({ day: '2026-11-24', tx_type: 'restock', total_amount_ngn: 40000, amount_paid_ngn: 40000, products: { name: 'Lace' } }),
   tx({ day: '2026-11-25', tx_type: 'debt_repayment', total_amount_ngn: 12000, amount_paid_ngn: 12000, payment_method: 'cash', products: null, customers: { name: 'Femi' } }),
 ];
 
 describe('analytics', () => {
-  it('totals: sales − (expenses + restock); old-debt payments are not sales', () => {
-    expect(totals(rows)).toEqual({ revenue: 170000, spend: 55000, profit: 115000 });
+  it('TRUE profit = sales − cost of goods sold − running costs; stock bought is NOT a cost; old-debt payments are not sales', () => {
+    expect(totals(rows)).toEqual({ revenue: 170000, cogs: 82000, running: 15000, stockBought: 40000, spend: 97000, profit: 73000, unpriced: 0 });
+  });
+  it('selling stock bought earlier is not 100% profit, and buying stock is not a loss', () => {
+    const sale = tx({ day: '2026-11-23', quantity: 10, unit_cost_ngn: 15000, total_amount_ngn: 200000, amount_paid_ngn: 200000 });
+    const buy = tx({ day: '2026-11-24', tx_type: 'restock', total_amount_ngn: 700000, amount_paid_ngn: 700000, products: null });
+    expect(totals([sale]).profit).toBe(50000);            // was 200000 before the fix
+    expect(totals([sale, buy]).profit).toBe(50000);       // was −500000 before the fix
+  });
+  it('sales with no cost price are flagged: profit is "at most" and the gap is reported', () => {
+    const t = totals([tx({ day: '2026-11-23', total_amount_ngn: 30000, amount_paid_ngn: 30000 }), tx({ day: '2026-11-23', quantity: 1, unit_cost_ngn: 10000, total_amount_ngn: 20000, amount_paid_ngn: 20000 })]);
+    expect(t).toMatchObject({ revenue: 50000, cogs: 10000, unpriced: 30000, profit: 40000 });
+    expect(trendInsight(t, trend([], new Date('2026-11-22T23:00:00Z'), 1), true)).toContain('Up to');
   });
   it('trend: one point per Lagos day, empty days kept, profit per day', () => {
     const pts = trend(rows, new Date('2026-11-22T23:00:00Z'), 7); // starts Mon 23 Nov WAT
     expect(pts).toHaveLength(7);
     expect(pts.map((p) => p.revenue)).toEqual([70000, 0, 0, 0, 0, 100000, 0]);
-    expect(pts[1]).toMatchObject({ spend: 55000, profit: -55000 });
+    expect(pts[0]).toMatchObject({ spend: 42000, profit: 28000 });    // Monday: goods sold cost 30k + 12k
+    expect(pts[1]).toMatchObject({ spend: 15000, profit: -15000 });   // Tuesday: only the fuel; the 40k stock purchase is not a cost
   });
   it('trend: long ranges are grouped weekly', () => {
     expect(trend(rows, new Date('2026-09-01T00:00:00Z'), 90)).toHaveLength(13);
@@ -52,7 +64,7 @@ describe('analytics', () => {
     expect(paymentInsight(paymentMix(rows))).toContain('₦20,000 of new sales went out on credit');
   });
   it('expense breakdown separates stock bought from running costs', () => {
-    expect(expenseBreakdown(rows).map((b) => [b.label, b.value])).toEqual([['Stock bought', 40000], ['Fuel/Diesel', 15000]]);
+    expect(expenseBreakdown(rows).map((b) => [b.label, b.value])).toEqual([['Stock bought (not a cost)', 40000], ['Fuel/Diesel', 15000]]);
   });
   it('debt aging buckets by days owed and flags the old money', () => {
     const now = new Date('2026-11-24T12:00:00Z').getTime();
@@ -67,9 +79,10 @@ describe('analytics', () => {
     expect(agingInsight(b)).toContain('₦10,000 has been owed for over 30 days');
   });
   it('compare insight: up/down against the period before, and no history yet', () => {
-    expect(compareInsight({ revenue: 150, spend: 0, profit: 0 }, { revenue: 100, spend: 0, profit: 0 })).toContain('up 50%');
-    expect(compareInsight({ revenue: 50, spend: 0, profit: 0 }, { revenue: 100, spend: 0, profit: 0 })).toContain('down 50%');
-    expect(compareInsight({ revenue: 50, spend: 0, profit: 0 }, { revenue: 0, spend: 0, profit: 0 })).toContain('Not enough history');
+    const T = (revenue: number) => ({ revenue, cogs: 0, running: 0, stockBought: 0, spend: 0, profit: 0, unpriced: 0 });
+    expect(compareInsight(T(150), T(100))).toContain('up 50%');
+    expect(compareInsight(T(50), T(100))).toContain('down 50%');
+    expect(compareInsight(T(50), T(0))).toContain('Not enough history');
   });
   it('stock health: out, nearly out, and cash tied up in stock that has not sold in 3 weeks', () => {
     const now = Date.now();
@@ -81,7 +94,7 @@ describe('analytics', () => {
     expect(h).toEqual({ out: ['Gele'], low: ['Ankara (2 left)'], deadCount: 1, deadValue: 50000 });
   });
   it('empty data never throws', () => {
-    expect(totals([])).toEqual({ revenue: 0, spend: 0, profit: 0 });
+    expect(totals([])).toEqual({ revenue: 0, cogs: 0, running: 0, stockBought: 0, spend: 0, profit: 0, unpriced: 0 });
     expect(weekdayInsight(weekdays([]))).toContain('No sales');
     expect(paymentMix([])).toEqual([]);
   });

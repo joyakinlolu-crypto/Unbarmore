@@ -6,6 +6,8 @@ import { ngn } from './format';
 export interface MonthlyStatement {
   businessName: string; rcNumber: string | null; monthLabel: string;
   revenue: number; expenses: number; restock: number; netProfit: number; cashIn: number; debtCollected: number;
+  /** Cost of goods sold and sales with no cost price; omitted on an older database (then netProfit is only cash left). */
+  cogs?: number; unpriced?: number;
   categories: { category: string; amount: number }[];
   topProducts: { name: string; qty: number; revenue: number }[];
   debtors: { name: string; amount: number }[];
@@ -39,9 +41,18 @@ export function monthlyStatementPdf(s: MonthlyStatement): Promise<Buffer> {
 
     h('Summary');
     row('Sales (revenue)', ngn(s.revenue));
-    row('Operating expenses', ngn(s.expenses));
-    row('Stock purchases', ngn(s.restock));
-    row('Net profit', ngn(s.netProfit), true, s.netProfit >= 0 ? '#059669' : '#E11D48');
+    if (s.cogs !== undefined) {
+      row('Cost of the goods sold', ngn(s.cogs));
+      row('Gross profit', ngn(s.revenue - s.cogs));
+      row('Operating expenses (rent, fuel, staff…)', ngn(s.expenses));
+      row((s.unpriced ?? 0) > 0 ? 'Net profit (at most)' : 'Net profit', ngn(s.netProfit), true, s.netProfit >= 0 ? '#059669' : '#E11D48');
+      row('Memo: stock purchases (on the shelf, not a cost)', ngn(s.restock));
+      if ((s.unpriced ?? 0) > 0) { doc.font('r').fontSize(8).fillColor('#B45309').text(`${ngn(s.unpriced ?? 0)} of sales have no cost price recorded, so the real profit is lower.`, x); doc.moveDown(0.3); }
+    } else {
+      row('Operating expenses', ngn(s.expenses));
+      row('Stock purchases', ngn(s.restock));
+      row('Cash left (sales − expenses − stock; not profit)', ngn(s.netProfit), true, s.netProfit >= 0 ? '#059669' : '#E11D48');
+    }
     row('Cash & transfers received', ngn(s.cashIn));
     row('…of which old debts collected', ngn(s.debtCollected));
     if (s.categories.length) { h('Expenses by category'); s.categories.forEach((c) => row(c.category, ngn(c.amount))); }

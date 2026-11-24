@@ -115,8 +115,10 @@ describe('advisor snapshot (fixes to the supplied draft)', () => {
     expect(s.debtors.debtorCount).toBe(7);
     expect(s.debtors.topDebtors).toHaveLength(5);
   });
-  it('profit matches the WhatsApp bot (sales − expenses − restock) and includes restock', async () => {
+  it('before migration 005 the advisor sees CASH LEFT (sales − expenses − restock) and is told it is NOT profit', async () => {
     const s = await buildBusinessSnapshot('b1');
+    expect(s.last30Days.profitIsTrue).toBe(false);
+    expect(buildAdvisorSystemPrompt(s, { finalFreeMessage: false })).toContain('this is cash left, NOT profit');
     expect(s.last30Days.netProfitNgn).toBe(220000);
     expect(s.last30Days.restockNgn).toBe(200000);
     expect(s.last30Days.netMarginPct).toBe(44);
@@ -183,7 +185,7 @@ describe('message 3 of 3: open with the biggest exact ₦ leak', () => {
 
   const snap = (over: { cats?: BusinessFinancialSnapshot['last30Days']['topExpenseCategories']; debtors?: BusinessFinancialSnapshot['debtors']['topDebtors'] }): BusinessFinancialSnapshot => ({
     businessName: 'Ada Fabrics', category: 'Fashion', subscriptionTier: 'trial', todayWat: '2026-11-19', valueRecoveredNgn: 0,
-    last30Days: { revenueNgn: 500000, expensesNgn: 80000, restockNgn: 0, netProfitNgn: 420000, netMarginPct: 84, cashCollectedNgn: 400000, newCreditSalesUnpaidNgn: 0, creditSharePct: 0, topExpenseCategories: over.cats ?? [] },
+    last30Days: { revenueNgn: 500000, expensesNgn: 80000, restockNgn: 0, netProfitNgn: 420000, netMarginPct: 84, profitIsTrue: true, cogsNgn: 0, unpricedRevenueNgn: 0, cashCollectedNgn: 400000, newCreditSalesUnpaidNgn: 0, creditSharePct: 0, topExpenseCategories: over.cats ?? [] },
     debtors: { totalOutstandingDebtNgn: 0, debtorCount: 0, topDebtors: over.debtors ?? [] },
     inventoryAndPricing: { topProducts: [], inflationAlerts: [], deadStockItems: [] },
   });
@@ -226,4 +228,25 @@ describe('referral wallet card (₦5,000 payout threshold, ₦1,000 renewal disc
   });
   it('₦5,000 or more unlocks the cash payout button', () => { expect(walletState(5000, false)).toEqual({ kind: 'unlocked' }); expect(walletState(12000, false)).toEqual({ kind: 'unlocked' }); });
   it('a pending payout wins over everything (no second button)', () => { expect(walletState(9000, true)).toEqual({ kind: 'pending' }); expect(walletState(0, true)).toEqual({ kind: 'pending' }); });
+});
+
+
+describe('advisor snapshot: TRUE profit (database has migration 005)', () => {
+  const base = { cash_in_ngn: '380000', expenses_ngn: '80000', restock_ngn: '700000' };
+  const run = async (row: Record<string, string>) => { DATA.rpc = { ...DATA.rpc, ledger_summary: [{ revenue_ngn: '500000', ...base, ...row }] }; return buildBusinessSnapshot('b1'); };
+
+  it('profit = sales − cost of goods sold − running costs; a ₦700k stock purchase is NOT a loss', async () => {
+    const s = await run({ cogs_ngn: '300000', gross_profit_ngn: '200000', unpriced_revenue_ngn: '0', net_profit_ngn: '120000' });
+    expect(s.last30Days).toMatchObject({ profitIsTrue: true, cogsNgn: 300000, netProfitNgn: 120000, netMarginPct: 24, unpricedRevenueNgn: 0 });
+    const p = buildAdvisorSystemPrompt(s, { finalFreeMessage: false });
+    expect(p).toContain('Cost of Goods Sold');
+    expect(p).toContain('NOT an expense and NOT a loss');
+    expect(p).toContain('sales − cost of goods sold − operating expenses): ₦120,000');
+    expect(p).not.toContain('AT MOST');
+  });
+  it('when some sales have no cost price, profit is "AT MOST" and the advisor is told to ask for the cost prices', async () => {
+    const p = buildAdvisorSystemPrompt(await run({ cogs_ngn: '200000', gross_profit_ngn: '300000', unpriced_revenue_ngn: '150000', net_profit_ngn: '220000' }), { finalFreeMessage: false });
+    expect(p).toContain('AT MOST ₦220,000');
+    expect(p).toContain('₦150,000 of sales have NO cost price recorded');
+  });
 });

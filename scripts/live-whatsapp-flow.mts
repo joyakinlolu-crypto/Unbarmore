@@ -175,10 +175,11 @@ try {
   ok('quota not charged at proposal time', Number((await rows(`businesses?id=eq.${biz!.id}&select=tx_logged_this_month`))[0]?.tx_logged_this_month) === 0);
 
   r = await ask('confirm', () => button(confirmId), (v) => /Saved/.test(v.text) && v.buttons.some((b) => b.id.startsWith('RCPT:')));
-  ok('Confirm → ONE light message: saved + today\'s profit + [🧾 Customer Receipt] + Undo (no PDF forced on every sale)', !!r.reply && /Profit/.test(r.reply.text) && r.reply.header === null && r.reply.buttons.some((b) => b.id.startsWith('TXU:')) && r.reply.buttons.some((b) => /Customer Receipt/.test(b.title)), r.reply?.text.replace(/\n/g, ' | '));
+  ok('Confirm → ONE light message: saved + today\'s profit + [🧾 Customer Receipt] + Undo (no PDF forced on every sale)', !!r.reply && /Profit|Cash left/.test(r.reply.text) && r.reply.header === null && r.reply.buttons.some((b) => b.id.startsWith('TXU:')) && r.reply.buttons.some((b) => /Customer Receipt/.test(b.title)), r.reply?.text.replace(/\n/g, ' | '));
   ok('that was exactly one outbound message for the action', real(r.all).length === 1, `${real(r.all).length} message(s)`);
   ok('PDF quota untouched until a receipt is actually requested', Number((await rows(`businesses?id=eq.${biz!.id}&select=pdf_receipts_used_this_month`))[0]?.pdf_receipts_used_this_month) === 0);
   const rcptId = r.reply?.buttons.find((b) => b.id.startsWith('RCPT:'))?.id ?? '';
+  ok('selling an item with no cost price → asks ONCE what it costs ("What does Lace cost you? Say lace costs me 15k…") so profit can be real', /What does \*?Lace\*? cost you\?/i.test(r.reply?.text ?? '') && /costs me 15k/.test(r.reply?.text ?? ''), (r.reply?.text ?? '').replace(/\n/g, ' | ').slice(-200));
   ok('first confirmed entry also cheers and points to the next step ("🎉 First entry saved! Next: tell me who owes you")', /First entry saved/.test(r.reply?.text ?? ''));
   const lq = await ask('receipt-logo-q', () => button(rcptId), (v) => /Do you have a logo/.test(v.text));
   ok('the FIRST receipt asks once: "Do you have a logo?" with [Send my logo] / [Use my name], and makes no PDF yet', !!lq.reply && lq.reply.kind !== 'document' && lq.reply.buttons.map((b) => b.id.split(':').slice(0, 2).join(':')).join() === 'LOGO:ask,LOGO:name', lq.reply?.text.replace(/\n/g, ' | '));
@@ -407,6 +408,7 @@ try {
     ok('…and the caption tells them it is a preview (Starter = full HD)', /10-second preview/.test(videoMsg?.text ?? ''));
     // What does the voice actually SAY? (an earlier bug made it read the prompt instructions aloud before the ad)
     const wav = path.join(tmp, 'vo-check.wav');
+    if (!as) { ok('(skipped: this video has no audio because Google speech is rate-limited right now; the check above already reported it)', true); } else {
     execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
@@ -420,6 +422,7 @@ try {
     console.log(`   🎙️  the voice says: "${said.replace(/\n/g, ' ')}"`);
     ok('the voice speaks ONLY the ad: no spoken instructions ("read this advert…", "accent", "do not add anything")', said.length > 10 && !/read this|do not add|accent|market seller|energetic/i.test(said), said.slice(0, 160));
     ok('…and the ad is not cut off: the call to action (WhatsApp / order) is still there', /whatsapp|order/i.test(said), said.slice(-80));
+    }
     fs.copyFileSync(f, path.resolve('tmp', 'flow-video.mp4'));
   }
   const vj = (await rows(`video_jobs?business_id=eq.${biz!.id}&select=status,include_watermark,cleaned_image_urls,generated_script,error_message`))[0];
@@ -551,6 +554,16 @@ try {
   ok('WIN BACK with nobody quiet → says so honestly (no invented messages)', !!r.reply && /Nobody has gone quiet/.test(r.reply.text), r.reply?.text);
   r = await ask('start', () => text('START'), (v) => /Getting started/.test(v.text));
   ok('START → "How Unbarmore works" + a live checklist (✅ done / ⬜ to do) + the next step', !!r.reply && /How Unbarmore works/.test(r.reply.text) && /✅/.test(r.reply.text) && /⬜/.test(r.reply.text) && /Next:/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 300));
+
+  // ───── cost price → real profit ─────
+  r = await ask('cost-price', () => text('gele costs me 3k'), (v) => v.buttons.some((b) => b.id.startsWith('ACTOK:')));
+  ok('"gele costs me 3k" → preview of the cost price (not a purchase, not a sale)', !!r.reply && /Gele/i.test(r.reply.text) && /3,000/.test(r.reply.text) && /not counted as a sale or a purchase/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+  const costOk = r.reply?.buttons.find((b) => b.id.startsWith('ACTOK:'))?.id ?? '';
+  await ask('cost-confirm', () => button(costOk), (v) => /Updated 1 product/.test(v.text));
+  const gele2 = (await rows(`products?business_id=eq.${biz!.id}&select=cost_price_ngn&name_key=eq.gele`))[0];
+  ok('database: Gele now has cost price ₦3,000', Number(gele2?.cost_price_ngn) === 3000, JSON.stringify(gele2));
+  r = await ask('profit-q', () => text('what is my profit this month'), (v) => /Profit|Cash left/.test(v.text), 40_000);
+  ok('"what is my profit" → a labelled breakdown: Sales, then Profit (or honestly "Cash left" until cost prices are set up), and stock bought is explained as not a cost', !!r.reply && /Sales:/.test(r.reply.text) && /(Profit|Cash left):/.test(r.reply.text) && /Stock bought/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 300));
 
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));

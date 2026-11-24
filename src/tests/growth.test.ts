@@ -92,22 +92,23 @@ describe('onboarding checklist', () => {
   const b = { id: 'b1', videos_used_this_month: 0, created_at: ago(1) } as never;
   it('a brand-new account: nothing done, first step is logging a sale', async () => {
     const steps = await onboardingSteps(b);
-    expect(steps.map((s) => s.done)).toEqual([false, false, false, false, false]);
+    expect(steps.map((s) => s.done)).toEqual([false, false, false, false, false, false]);
     expect(nextStep(steps)!.id).toBe('first_entry');
     const t = checklistText(steps);
     expect(t).toContain('How Unbarmore works');
-    expect(t).toContain('0 of 5 done');
+    expect(t).toContain('0 of 6 done');
     expect(t).toContain('👉 *Next:* Tell me a sale or an expense');
   });
   it('detects real progress and moves the "next" pointer', async () => {
     db.counts = { 'transactions:business_id=b1,status=confirmed': 3, 'customers:business_id=b1,outstanding_debt_ngn>': 2 };
     const steps = await onboardingSteps(b);
-    expect(steps.slice(0, 2).map((s) => s.done)).toEqual([true, true]);
-    expect(nextStep(steps)!.id).toBe('receipt');
-    expect(checklistText(steps)).toContain('2 of 5 done');
+    expect(steps.map((s) => s.done)).toEqual([true, false, true, false, false, false]);
+    expect(nextStep(steps)!.id).toBe('costs');      // cost prices come next: they are what makes the profit figure real
+    expect(checklistText(steps)).toContain('2 of 6 done');
+    expect(checklistText(steps)).toContain('lace costs me 15k');
   });
   it('everything done → celebrates, and nudges stop', async () => {
-    db.counts = { 'transactions:business_id=b1,status=confirmed': 1, 'customers:': 1, 'transactions:business_id=b1,receipt_pdf_url!null': 1, 'push_subscriptions:': 1 };
+    db.counts = { 'transactions:business_id=b1,status=confirmed': 1, 'products:': 1, 'customers:': 1, 'transactions:business_id=b1,receipt_pdf_url!null': 1, 'push_subscriptions:': 1 };
     const steps = await onboardingSteps({ id: 'b1', videos_used_this_month: 2 } as never);
     expect(steps.every((s) => s.done)).toBe(true);
     expect(checklistText(steps)).toContain('running your shop on Unbarmore');

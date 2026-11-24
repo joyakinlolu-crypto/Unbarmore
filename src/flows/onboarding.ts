@@ -2,14 +2,15 @@ import { db, type Actor, type Business } from '../db/supabase.js';
 import { TRIAL_DAYS } from '../config/plans.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 
-/** The five things that make Unbarmore stick. Each is detected from real activity, so the list can never lie or go stale. */
-export interface Step { id: 'first_entry' | 'debts' | 'receipt' | 'app' | 'video'; done: boolean; title: string; how: string }
+/** The things that make Unbarmore stick. Each is detected from real activity, so the list can never lie or go stale. */
+export interface Step { id: 'first_entry' | 'costs' | 'debts' | 'receipt' | 'app' | 'video'; done: boolean; title: string; how: string }
 
 const head = { count: 'exact', head: true } as const;
 
 export async function onboardingSteps(b: Pick<Business, 'id' | 'videos_used_this_month'>): Promise<Step[]> {
-  const [tx, debtor, repaid, receipts, push] = await Promise.all([
+  const [tx, costed, debtor, repaid, receipts, push] = await Promise.all([
     db.from('transactions').select('id', head).eq('business_id', b.id).eq('status', 'confirmed'),
+    db.from('products').select('id', head).eq('business_id', b.id).gt('cost_price_ngn', 0),
     db.from('customers').select('id', head).eq('business_id', b.id).gt('outstanding_debt_ngn', 0),
     db.from('transactions').select('id', head).eq('business_id', b.id).eq('tx_type', 'debt_repayment').eq('status', 'confirmed'),
     db.from('transactions').select('id', head).eq('business_id', b.id).not('receipt_pdf_url', 'is', null),
@@ -18,6 +19,7 @@ export async function onboardingSteps(b: Pick<Business, 'id' | 'videos_used_this
   const n = (r: { count: number | null }) => r.count ?? 0;
   return [
     { id: 'first_entry', done: n(tx) > 0, title: 'Tell me a sale or an expense', how: 'Send a voice note or type: _sold 2 lace 50k cash_' },
+    { id: 'costs', done: n(costed) > 0, title: 'Tell me what your items cost you', how: 'Type: _lace costs me 15k_. This is how I work out your real profit' },
     { id: 'debts', done: n(debtor) > 0 || n(repaid) > 0, title: 'Record who owes you', how: 'Type: _Femi owes me 14k, Kalu 28k_' },
     { id: 'receipt', done: n(receipts) > 0, title: 'Make a customer receipt', how: 'After a sale, tap 🧾 Customer Receipt (or say RECEIPT)' },
     { id: 'app', done: n(push) > 0, title: 'Get your evening money alert', how: 'Type DASHBOARD, add it to your Home Screen, tap "Turn on my evening alert"' },
