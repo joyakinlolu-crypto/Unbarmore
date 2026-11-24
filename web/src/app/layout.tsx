@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import SwRegister from '@/components/SwRegister';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -11,5 +12,5 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { themeColor: '#1E3A8A', width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="en"><body className="min-h-dvh antialiased">{children}</body></html>;
+  return <html lang="en"><body className="min-h-dvh antialiased">{children}<SwRegister /></body></html>;
 }

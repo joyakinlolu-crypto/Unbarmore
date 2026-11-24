@@ -9,6 +9,7 @@ import { appendLedgerRows } from '../services/googleSheets.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { ngn, ngnShort } from '../lib/money.js';
 import { todayLine } from './insights.js';
+import { moneyBack, moneyBackLine } from './moneyBack.js';
 
 export const BTN = {
   confirm: (batch: string) => `TXC:${batch}`,
@@ -148,6 +149,13 @@ export async function confirmAndRespond(actor: Actor, batchId: string): Promise<
   const r = reply(actor.phone);
 
   r.text(`✅ Saved ${rows.length > 1 ? `${rows.length} entries` : ''}`.trim(), await todayLine(actor.business.id));
+
+  // The moment that sells the app: money owed to them just came in.
+  const collected = rows.filter((t) => t.tx_type === 'debt_repayment').reduce((a, t) => a + Number(t.amount_paid_ngn), 0);
+  if (collected > 0) {
+    const mbLine = await moneyBack(actor.business).then(moneyBackLine).catch(() => null);
+    r.text('', `🎉 ${ngn(collected)} collected from your customers.`, ...(mbLine ? [mbLine] : []));
+  }
 
   // Low stock after this sale?
   const lows = lowStockLines(stockBefore, await stockSnapshot(rows));

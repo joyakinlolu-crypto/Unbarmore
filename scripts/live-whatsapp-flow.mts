@@ -400,6 +400,16 @@ try {
   const notices = sent.map(view).filter((v) => /Processing your entry\.\.\./.test(v.text));
   ok('slow AI → "⏳ Processing your entry..." was sent (and only as a lone short note)', notices.length >= 1 && notices.every((v) => v.kind === 'text' && v.buttons.length === 0), `${notices.length} notice(s)`);
 
+  // ───── money back: a customer pays what they owed → the moment that sells the app ─────
+  r = await ask('credit-sale', () => text('sold 1 ankara 20k, balance 20k Mama Tunde'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const creditId = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id ?? '';
+  await ask('credit-confirm', () => button(creditId), (v) => /Saved/.test(v.text));
+  r = await ask('repay', () => text('Mama Tunde paid me 20k transfer'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const repayId = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'))?.id ?? '';
+  r = await ask('repay-confirm', () => button(repayId), (v) => /Saved/.test(v.text));
+  ok('debt payment confirm → "🎉 ₦20,000 collected from your customers" + "Money Unbarmore got back for you: ₦20,000"', !!r.reply && /🎉 ₦20,000 collected from your customers/.test(r.reply.text) && /Money Unbarmore got back for you: ₦20,000/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+  ok('…still ONE message, and the debt is back to ₦0', real(r.all).length === 1 && Number((await rows(`customers?business_id=eq.${biz!.id}&select=outstanding_debt_ngn`))[0]?.outstanding_debt_ngn) === 0);
+
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));
   ok('no secrets appear in any outbound message', !/sb_secret_|EAAf|AQ\.Ab8|ea5d2437/.test(everything));

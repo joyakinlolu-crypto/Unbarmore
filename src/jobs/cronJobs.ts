@@ -5,7 +5,9 @@ import { claimOutbound, consumeQuota, db, isInServiceWindow, ledgerSummary, type
 import { cronQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey, watWeekKey } from '../lib/money.js';
 import { createOwnerMagicLink, createOwnerMagicToken } from '../services/webLink.js';
+import { businessesWithPush, pushEnabled, sendPushToBusiness } from '../services/push.js';
 import { reply, sendTemplate } from '../services/whatsapp.js';
+import { buildDailyPush } from '../flows/dailyPush.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
 
@@ -16,6 +18,7 @@ const TZ = 'Africa/Lagos';
 export async function registerSchedules(): Promise<void> {
   await cronQueue.upsertJobScheduler('hourly-maintenance', { pattern: '5 * * * *', tz: TZ }, { name: 'hourly' });
   await cronQueue.upsertJobScheduler('daily-checkin', { pattern: '0 21 * * *', tz: TZ }, { name: 'daily-checkin' });
+  await cronQueue.upsertJobScheduler('daily-push', { pattern: '0 20 * * *', tz: TZ }, { name: 'daily-push' });
   await cronQueue.upsertJobScheduler('sunday-ceo', { pattern: '0 18 * * 0', tz: TZ }, { name: 'sunday-ceo' });
 }
 
@@ -86,6 +89,22 @@ async function dailyCheckin(): Promise<void> {
   }
 }
 
+/** 8 PM WAT app notification to every owner who installed the app and allowed alerts. Free, and works outside the WhatsApp window. */
+async function dailyPush(): Promise<void> {
+  if (!pushEnabled()) return;
+  const day = watDateKey();
+  for (const id of await businessesWithPush()) {
+    try {
+      if (!(await claimOutbound(id, 'daily_push', day))) continue;
+      const { data: b } = await db.from('businesses').select('*').eq('id', id).single();
+      if (!b) continue;
+      await sendPushToBusiness(id, await buildDailyPush(b as Business));
+    } catch (err) {
+      console.error('[cron:daily-push]', id, err);
+    }
+  }
+}
+
 /**
  * Sunday 6 PM WAT CEO Report.
  *  - Eligible: trial (once — first Sunday), starter_5k, growth_15k. NEVER free_limited / expired.
@@ -123,6 +142,8 @@ async function sundayCeo(): Promise<void> {
         const token = (await createOwnerMagicToken(biz.id).catch(() => null)) ?? 'expired';
         await sendTemplate(biz.owner_phone, env.WHATSAPP_CEO_TEMPLATE, reportTemplateParams(biz, rep), [], token);
       }
+      // Also ping the app (free). A failure here must never undo or repeat the WhatsApp send above.
+      await sendPushToBusiness(biz.id, { title: `${biz.name}: your weekly report is ready`, body: `Net profit ${ngn(rep.netProfit)} · sales ${ngn(rep.revenue)}`, url: '/dashboard', tag: 'weekly' }).catch(() => 0);
     } catch (err) {
       console.error('[cron:sunday-ceo]', biz.id, err);
     }
@@ -136,6 +157,7 @@ export function startCronWorker() {
       switch (job.name) {
         case 'hourly': return hourly();
         case 'daily-checkin': return dailyCheckin();
+        case 'daily-push': return dailyPush();
         case 'sunday-ceo': return sundayCeo();
       }
     },
@@ -143,4 +165,4 @@ export function startCronWorker() {
   );
 }
 
-export const __test = { hourly, dailyCheckin, sundayCeo };
+export const __test = { hourly, dailyCheckin, dailyPush, sundayCeo };

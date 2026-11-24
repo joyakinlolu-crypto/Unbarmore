@@ -83,6 +83,38 @@ try {
   ok('Customers owe you ₦95,000 (1 customer)', /Customers owe you ₦95,000 1 customer/.test(dTxt));
   ok('expense breakdown lists Fuel/Diesel ₦60,000 and Rent ₦20,000', dTxt.includes('Fuel/Diesel') && dTxt.includes('₦60,000') && dTxt.includes('Rent/Utilities') && dTxt.includes('₦20,000'));
   ok('plan badge shows Free trial', dTxt.includes('Free trial'));
+  ok('dashboard has a "Today" card: money in / spent / profit for today, top debtor, and a WhatsApp chase button',
+    /Today Money in ₦105,000 Spent ₦80,000 Profit ₦120,000/.test(dTxt) && /Still owing you Mama Tunde ₦95,000/.test(dTxt) && /Chase them on WhatsApp/.test(dTxt) && /Log a sale on WhatsApp/.test(dTxt),
+    (dTxt.match(/Today .{0,140}/) ?? [''])[0]);
+  ok('dashboard headline: nothing collected yet → invites the first chase (no fake number)', /Chase your first debt/.test(dTxt) && !/Money Unbarmore got back for you ₦/.test(dTxt));
+  await db.from('transactions').insert(row({ tx_type: 'debt_repayment', description: 'Debt repayment — Mama Tunde', category: 'Debt Repayment', total_amount_ngn: 30000, amount_paid_ngn: 30000, payment_method: 'transfer', customer_id: cust!.id }));
+  await db.from('businesses').update({ total_value_recovered_ngn: 16000 }).eq('id', bid);
+  const dTxt2 = text(await (await fetch(`${BASE}/dashboard`, { headers: { cookie } })).text());
+  ok('after ₦30,000 collected + ₦16,000 margin protected: headline shows ₦46,000 with both parts', /Money Unbarmore got back for you ₦46,000 ₦30,000 collected from customers \+ ₦16,000 margin protected/.test(dTxt2), (dTxt2.match(/Money Unbarmore got back.{0,120}/) ?? [''])[0]);
+  await db.from('businesses').update({ total_value_recovered_ngn: 0 }).eq('id', bid);
+
+  // ───────── evening alerts (web push) ─────────
+  const subBody = { endpoint: 'https://fcm.googleapis.com/fcm/send/e2e-test-device', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };
+  const pushPost = (body: unknown, headers: Record<string, string> = {}) => fetch(`${BASE}/api/push/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), redirect: 'manual' });
+  ok('/api/push/subscribe without a login → 401', (await pushPost(subBody)).status === 401);
+  ok('with a login but a junk subscription → 400', (await pushPost({ endpoint: 'http://insecure.example', keys: subBody.keys }, { cookie })).status === 400);
+  ok('a request from another website is refused (403)', (await pushPost(subBody, { cookie, origin: 'https://evil.example' })).status === 403);
+  const sv = await pushPost(subBody, { cookie });
+  const svJson = await sv.json().catch(() => ({}));
+  if (sv.status === 200) {
+    const { data: rows } = await db.from('push_subscriptions').select('business_id').eq('endpoint', subBody.endpoint);
+    ok('valid subscription is saved against THIS business', rows?.length === 1 && rows[0]!.business_id === bid);
+    await pushPost(subBody, { cookie }); // same device again
+    const { data: again } = await db.from('push_subscriptions').select('id').eq('endpoint', subBody.endpoint);
+    ok('subscribing the same phone twice keeps one row', again?.length === 1);
+    const del = await fetch(`${BASE}/api/push/subscribe`, { method: 'DELETE', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ endpoint: subBody.endpoint }) });
+    const { data: gone } = await db.from('push_subscriptions').select('id').eq('endpoint', subBody.endpoint);
+    ok('turning alerts off removes the device', del.status === 200 && gone?.length === 0);
+  } else {
+    ok('valid subscription → 503 "not_ready" (run migration 004 to turn alerts on; nothing crashes before then)', sv.status === 503 && svJson.error === 'not_ready', `status ${sv.status}`);
+  }
+  const swJs = await (await fetch(`${BASE}/sw.js`)).text();
+  ok('service worker handles push + notification taps', swJs.includes('"push"') && swJs.includes('notificationclick') && swJs.includes('showNotification'));
 
   // ───────── 4. other pages + isolation ─────────
   const l = text(await (await fetch(`${BASE}/ledger`, { headers: { cookie } })).text());
@@ -123,11 +155,35 @@ try {
   const linkB = await createOwnerMagicLink(bid);
   browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, deviceScaleFactor: 1 });
+  await ctx.grantPermissions(['notifications'], { origin: BASE }); // a headless browser starts with notifications blocked; a real user taps Allow
   const page = await ctx.newPage();
   await page.goto(linkB!);
   await page.getByRole('button', { name: 'Open my dashboard' }).click();
   await page.waitForURL('**/dashboard');
   ok('browser login: tap "Open my dashboard" → lands on /dashboard', true);
+
+  // evening alerts in a real browser. Headless Chromium has notifications BLOCKED and no reachable push service, so we check the honest paths:
+  await page.waitForTimeout(3000);
+  ok('the service worker is registered (offline page, fast reopen and alerts all depend on it)', await page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration())));
+  await page.goto(`${BASE}/settings`);
+  await page.getByText(/Alerts are blocked/).waitFor({ timeout: 10000 }).catch(() => undefined);
+  ok('notifications blocked in the browser → Settings says how to unblock (no broken button)', (await page.getByText(/Alerts are blocked/).count()) === 1);
+  // now as a user who tapped "Allow", on a phone whose push service we cannot reach: must fail politely, never hang
+  const ctx2 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx2.addInitScript(`Object.defineProperty(Notification, 'permission', { get: () => 'granted' }); Notification.requestPermission = async () => 'granted';`);
+  const page2 = await ctx2.newPage();
+  await page2.goto(await createOwnerMagicLink(bid) as string); await page2.getByRole('button', { name: 'Open my dashboard' }).click(); await page2.waitForURL('**/dashboard');
+  const alertBtn = page2.getByRole('button', { name: /Turn on my evening alert/ });
+  await alertBtn.waitFor({ timeout: 20000 }).catch(() => undefined);
+  ok('allowed + not yet subscribed → dashboard shows the "Turn on my evening alert" card', (await alertBtn.count()) === 1);
+  await alertBtn.click().catch(() => undefined);
+  const outcome = await Promise.race([
+    page2.getByText(/Evening money alert is on/).waitFor({ timeout: 25000 }).then(() => 'on'),
+    page2.locator('section[aria-label="Evening money alert"] [role=alert]').waitFor({ timeout: 25000 }).then(() => 'error'),
+  ]).catch(() => 'stuck');
+  ok('tapping it ends clearly: on, or a readable error with the button usable again (never stuck on "Turning on…")', outcome !== 'stuck' && (await page2.getByRole('button', { name: /Turning on/ }).count()) === 0, `outcome: ${outcome}: ${await page2.locator('section[aria-label="Evening money alert"] [role=alert]').textContent().catch(() => '')}`);
+  await ctx2.close();
+  await page.goto(`${BASE}/dashboard`);
   await page.goto(`${BASE}/advisor`);
   ok('advisor starts with the 4 quick-prompt chips', (await page.locator('button:has-text("Where am I leaking money")').count()) === 1);
 

@@ -34,12 +34,21 @@ function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rc
   doc.moveDown(0.8);
 }
 
-function footer(doc: PDFKit.PDFDocument) {
+/** Invitation printed on customer-facing receipts: the owner's customers are the next owners. Omitted on the no-watermark plan. */
+export interface Promo { botNumber: string; referralCode: string }
+
+function footer(doc: PDFKit.PDFDocument, promo?: Promo | null) {
+  const w = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const y = doc.page.height - doc.page.margins.bottom - 12;
+  if (promo) {
+    const link = `https://wa.me/${promo.botNumber}?text=${encodeURIComponent(`Hi Unbarmore ${promo.referralCode}`)}`;
+    doc.font('bold').fontSize(8).fillColor(BRAND.green)
+      .text(`Run your shop on WhatsApp. Try Unbarmore free: wa.me/${promo.botNumber}`, doc.page.margins.left, y - 22, { width: w, align: 'center', lineBreak: false, link, underline: true });
+    doc.font('reg').fontSize(7).fillColor(BRAND.muted)
+      .text(`Use code ${promo.referralCode} and you both get ₦1,000`, doc.page.margins.left, y - 11, { width: w, align: 'center', lineBreak: false });
+  }
   doc.font('reg').fontSize(7).fillColor(BRAND.muted)
-    .text('Generated on WhatsApp with Unbarmore · unbarmore.com', doc.page.margins.left, y, {
-      width: doc.page.width - doc.page.margins.left - doc.page.margins.right, align: 'center', lineBreak: false,
-    });
+    .text('Generated on WhatsApp with Unbarmore · unbarmore.com', doc.page.margins.left, y, { width: w, align: 'center', lineBreak: false });
 }
 
 // ───────────── Receipt (A5) ─────────────
@@ -58,6 +67,8 @@ export interface ReceiptInput {
   remainingBalance?: number;
   /** Date the remaining balance is as at, e.g. "20 Nov 2026". */
   balanceAsAt?: string;
+  /** Set unless the plan has no watermark. */
+  promo?: Promo | null;
 }
 
 export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
@@ -121,7 +132,7 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
       doc.restore().opacity(1);
     }
     doc.font('reg').fontSize(9).fillColor(BRAND.muted).text('Thank you for your patronage.', x, doc.y + 8, { width: w, align: 'center' });
-    footer(doc);
+    footer(doc, r.promo);
   }, 'A5');
 }
 

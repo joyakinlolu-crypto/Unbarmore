@@ -3,7 +3,9 @@
 Two deployments from this one GitHub repo:
 **Railway** = the WhatsApp bot (root `Dockerfile` + `railway.json`) · **Vercel** = the web app (`web/`, with `web/vercel.json`).
 
-Done once, before deploying: all THREE SQL files in `supabase/migrations/` have been run in Supabase, in order: `001`, `002`, then `003` (referral cash payouts). Without `003` everything else works, but WITHDRAW says "payouts are being switched on".
+Done once, before deploying: all FOUR SQL files in `supabase/migrations/` have been run in Supabase, in order: `001`, `002`, `003` (referral cash payouts), then `004` (app alerts). Without `003` everything else works, but WITHDRAW says "payouts are being switched on". Without `004` everything else works, but "Turn on my evening alert" says alerts are being set up.
+
+App alerts also need a VAPID key pair: `VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY` on the bot (Railway) and the same public key as `NEXT_PUBLIC_VAPID_PUBLIC_KEY` on the web app (Vercel). Without them alerts are simply off.
 
 ---
 

@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.hoisted(() => {
@@ -12,7 +16,7 @@ vi.hoisted(() => {
 const m = vi.hoisted(() => ({
   consumeQuota: vi.fn(), refundQuota: vi.fn(), confirmBatch: vi.fn(), undoBatch: vi.fn(), getBatchRows: vi.fn(), getProduct: vi.fn(),
   createPendingBatch: vi.fn(), setReceiptUrl: vi.fn(), uploadFile: vi.fn(), signedUrl: vi.fn(), isInServiceWindow: vi.fn(),
-  findBankSessionReuse: vi.fn(), updateBusiness: vi.fn(), customerRow: { current: null as unknown },
+  findBankSessionReuse: vi.fn(), updateBusiness: vi.fn(), ledgerSummary: vi.fn(), customerRow: { current: null as unknown },
 }));
 vi.mock('../db/supabase.js', () => ({
   ...m,
@@ -118,6 +122,25 @@ describe('confirmation message: receipt button + low-stock', () => {
     expect(p.interactive.body.text).toContain('Swiss Lace');
     expect(p.interactive.body.text).toContain('only 1 left');
     expect(m.consumeQuota.mock.calls.some((c) => c[1] === 'pdf_receipts_used_this_month')).toBe(false);   // PDF quota untouched until asked
+  });
+  it('a debt payment celebrates the money coming back and shows the running total', async () => {
+    const d = row({ tx_type: 'debt_repayment', product_id: null, description: 'Debt repayment', amount_paid_ngn: 20000, total_amount_ngn: 20000 });
+    m.getBatchRows.mockResolvedValueOnce([d]).mockResolvedValueOnce([{ ...d, status: 'confirmed' }]);
+    m.ledgerSummary.mockResolvedValue({ revenue_ngn: 0, cash_in_ngn: 0, expenses_ngn: 0, restock_ngn: 0, debt_collected_ngn: 184000, net_profit_ngn: 0, tx_count: 1 });
+    const text = ((await confirmAndRespond(actor({ total_value_recovered_ngn: 16000 }), 'batch1')).toPayload() as any).interactive.body.text as string;
+    expect(text).toContain('🎉 ₦20,000 collected from your customers.');
+    expect(text).toContain('Money Unbarmore got back for you: ₦200,000');
+  });
+  it('a plain sale shows no money-back line, and a failing lookup never breaks the reply', async () => {
+    m.getBatchRows.mockResolvedValueOnce([row()]).mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    m.getProduct.mockResolvedValue({ id: 'p1', name: 'Swiss Lace', stock_qty: 10, cost_price_ngn: 15000, selling_price_ngn: 25000 });
+    expect(JSON.stringify((await confirmAndRespond(actor(), 'batch1')).toPayload())).not.toContain('got back');
+    const d = row({ tx_type: 'debt_repayment', product_id: null, amount_paid_ngn: 5000 });
+    m.getBatchRows.mockResolvedValueOnce([d]).mockResolvedValueOnce([{ ...d, status: 'confirmed' }]);
+    m.ledgerSummary.mockRejectedValue(new Error('db down'));
+    const t = ((await confirmAndRespond(actor(), 'batch1')).toPayload() as any).interactive.body.text as string;
+    expect(t).toContain('🎉 ₦5,000 collected');
+    expect(t).not.toContain('got back');
   });
   it('an expense-only entry has no receipt button', async () => {
     const e = row({ tx_type: 'expense', product_id: null, customer_id: null, customers: null, description: 'Fuel' });
@@ -249,5 +272,31 @@ describe('payments not live', () => {
     const { paymentsLive } = await import('../services/paystack.js');
     expect(paymentsLive()).toBe(true);
     process.env.PAYSTACK_SECRET_KEY = 'sk_test_placeholder_replace_me';
+  });
+});
+
+const hasPdftotext = (() => { try { execFileSync('pdftotext', ['-v'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+describe.skipIf(!hasPdftotext)('receipt invite follows the plan watermark', () => {
+  const pdfText = async (tier: string) => {
+    m.getBatchRows.mockResolvedValueOnce([row({ status: 'confirmed' })]);
+    await customerReceiptReply(actor({ subscription_tier: tier, referral_code: 'UNBAR-X87X' }), 'batch1');
+    const file = join(mkdtempSync(join(tmpdir(), 'rcpt-')), 'r.pdf');
+    writeFileSync(file, m.uploadFile.mock.calls[0]![2]);
+    return execFileSync('pdftotext', [file, '-'], { encoding: 'utf8' });
+  };
+  it('trial / free / Starter receipts invite the customer with the owner\'s referral code', async () => {
+    for (const tier of ['trial', 'free_limited', 'starter_5k']) {
+      m.uploadFile.mockClear();
+      const t = await pdfText(tier);
+      expect(t, tier).toContain('wa.me/2348000000000');
+      expect(t, tier).toContain('UNBAR-X87X');
+    }
+  });
+  it('Growth (no watermark) receipts stay clean', async () => {
+    m.uploadFile.mockClear();
+    const t = await pdfText('growth_15k');
+    expect(t).not.toContain('wa.me/');
+    expect(t).not.toContain('UNBAR-X87X');
+    expect(t).toContain('Ada Fabrics');
   });
 });

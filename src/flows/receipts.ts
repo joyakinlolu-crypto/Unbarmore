@@ -1,3 +1,5 @@
+import { env } from '../config/env.js';
+import { PLANS } from '../config/plans.js';
 import { consumeQuota, db, getBatchRows, setReceiptUrl, signedUrl, uploadFile, type Actor } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
 import { receiptPdf } from '../services/pdfGenerator.js';
@@ -72,6 +74,7 @@ export async function customerReceiptReply(actor: Actor, batchId: string | null,
   const pdf = await receiptPdf({
     businessName: actor.business.name, rcNumber: actor.business.rc_number, receiptNumber, dateWat: date, customerName: customer,
     lines, amountPaid, paymentMethod: method || '—', remainingBalance: remaining, balanceAsAt: fmtDate(new Date().toISOString()),
+    promo: PLANS[actor.business.subscription_tier].watermark === 'none' ? null : { botNumber: env.WHATSAPP_DISPLAY_NUMBER, referralCode: actor.business.referral_code },
   });
   const path = await uploadFile('pdf-receipts', `${actor.business.id}/${receiptNumber}.pdf`, pdf, 'application/pdf');
   await setReceiptUrl(batchId, path);

@@ -51,6 +51,12 @@ const schema = z.object({
   PAYSTACK_PLAN_GROWTH_MONTHLY: z.string().optional(),
   PAYSTACK_PLAN_GROWTH_ANNUAL: z.string().optional(),
 
+  /** Web-push (free reach outside WhatsApp's 24h window). Generate once: npx web-push generate-vapid-keys. Both unset → push is simply off. */
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  /** mailto: or https: contact that push services can use. Defaults to the web app URL. */
+  VAPID_SUBJECT: z.string().optional(),
+
   GOOGLE_SHEETS_SA_JSON_B64: z.string().optional(),
 
   BGM_DIR: z.string().default('./assets/bgm'),

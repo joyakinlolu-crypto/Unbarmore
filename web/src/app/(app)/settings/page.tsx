@@ -1,5 +1,6 @@
 import { Gift, Share2 } from 'lucide-react';
 import LogoutButton from '@/components/LogoutButton';
+import PushPrompt from '@/components/PushPrompt';
 import { requireSession } from '@/lib/auth';
 import { ngn, waLink } from '@/lib/format';
 import { db } from '@/lib/supabase';
@@ -32,6 +33,8 @@ export default async function Settings() {
         <ProfileForm name={b.name} rc={b.rc_number ?? ''} theme={b.studio_theme} themesLocked={b.subscription_tier === 'free_limited'} />
         <p className="mt-3 text-xs text-slate-400">Logo on receipts is coming soon.</p>
       </section>
+
+      <section className={card}><h2 className="mb-2 font-semibold">Evening money alert</h2><PushPrompt compact /></section>
 
       <section className="rounded-3xl bg-gradient-to-br from-royal to-accent p-5 text-white">
         <h2 className="flex items-center gap-2 font-semibold"><Gift size={18} /> Give ₦1,000, get ₦1,000</h2>

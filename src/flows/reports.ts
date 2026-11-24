@@ -6,6 +6,7 @@ import { ngn, ngnShort, watWeekKey } from '../lib/money.js';
 import { writeDebtReminders } from '../services/geminiBrain.js';
 import { weeklyStatementPdf } from '../services/pdfGenerator.js';
 import { reply, type Reply } from '../services/whatsapp.js';
+import { moneyBack, moneyBackLine, type MoneyBack } from './moneyBack.js';
 import { daysSince, periodRange } from './insights.js';
 import { startClearanceVideo } from './video.js';
 
@@ -17,6 +18,8 @@ export interface WeeklyReport {
   deadStock: { id: string; name: string; qty: number; days: number }[];
   topProducts: { name: string; qty: number; revenue: number }[];
   valueRecovered: number;
+  /** All-time debt collected + margin protected; undefined only in hand-built test fixtures. */
+  moneyBack?: MoneyBack;
   periodLabel: string;
 }
 
@@ -24,13 +27,14 @@ export interface WeeklyReport {
 export async function buildWeeklyReport(b: Business): Promise<WeeklyReport> {
   const cur = periodRange('this_week');
   const prev = periodRange('last_week');
-  const [s, catNow, catPrev, debt, dead, top] = await Promise.all([
+  const [s, catNow, catPrev, debt, dead, top, mb] = await Promise.all([
     ledgerSummary(b.id, cur.from, cur.to),
     expensesByCategory(b.id, cur.from, cur.to),
     expensesByCategory(b.id, prev.from, prev.to),
     debtors(b.id, 10),
     deadStock(b.id, 21),
     topProducts(b.id, cur.from, cur.to, 5),
+    moneyBack(b).catch(() => undefined),
   ]);
   const prevMap = new Map(catPrev.map((c) => [c.category, c.amount]));
   const expenseByCategory = catNow.map((c) => {
@@ -47,6 +51,7 @@ export async function buildWeeklyReport(b: Business): Promise<WeeklyReport> {
     deadStock: dead.map((p) => ({ id: p.id, name: p.name, qty: Number(p.stock_qty), days: daysSince(p.last_sold_at) })),
     topProducts: top,
     valueRecovered: Number(b.total_value_recovered_ngn),
+    moneyBack: mb,
     periodLabel: `${fmt(cur.from)} → ${fmt(new Date(cur.to.getTime() - 1))} (${watWeekKey()})`,
   };
 }
@@ -61,7 +66,7 @@ export function reportText(b: Business, r: WeeklyReport): string[] {
     ...r.anomalies.slice(0, 2).map((a) => `⚠️ ${a.category} up ${Math.round(a.changePct)}% (${ngn(a.amount)})`),
     owed > 0 ? `💳 ${r.debtors.length} customer${r.debtors.length > 1 ? 's' : ''} owe you ${ngn(owed)}` : '💳 Nobody owes you 🎉',
     r.deadStock[0] ? `🧊 ${r.deadStock[0].name}: no sale in ${r.deadStock[0].days} days` : '',
-    r.valueRecovered > 0 ? `🛡️ Profit protected by Unbarmore: ${ngn(r.valueRecovered)}` : '',
+    (r.moneyBack ? moneyBackLine(r.moneyBack) : null) ?? (r.valueRecovered > 0 ? `🛡️ Profit protected by Unbarmore: ${ngn(r.valueRecovered)}` : ''),
   ].filter(Boolean);
 }
 

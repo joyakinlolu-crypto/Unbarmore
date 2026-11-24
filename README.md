@@ -106,3 +106,10 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - Double withdrawal is blocked by the database (locked wallet row + a unique "one pending payout per business" index + a 10-digit CHECK).
 - Admin (from `ADMIN_PHONE`): `PAYOUTS` lists pending · `PAID WD-XXXXXX` after paying · `REJECT WD-XXXXXX` returns the money to the wallet. The business is told either way.
 - SQL tests: `psql -v ON_ERROR_STOP=1 -f supabase/tests/003_payouts_test.sql` on a scratch database with 001–003 applied (22 checks, incl. a two-sessions race).
+
+## Retention: evening alerts, "money back", and the receipt invite (migration `004_push_subscriptions.sql`)
+- **Evening alert (8 PM WAT)**: owners who tap *Turn on my evening alert* in the web app get one free push every evening ("today in numbers", or "₦X is still owed to you", or "Sold anything today?"), plus a ping when the Sunday report is ready. It works outside WhatsApp's 24h window and costs nothing. Needs `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (bot) and `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (web).
+- **Money Unbarmore got back for you**: all debt collected since day one + margin protected by the Inflation Shield. Shown as the dashboard headline, in the Sunday report, and as a 🎉 line the moment a debt payment is confirmed on WhatsApp.
+- **Dashboard "Today" card**: money in / spent / profit, who still owes, and one-tap buttons to chase them or log a sale on WhatsApp.
+- **Receipt invite**: customer receipts on trial / free / Starter carry "Try Unbarmore free" + the owner's referral code (Growth receipts stay clean).
+- Service worker is now registered (it was built but never started before), so the offline page, fast reopen and alerts actually work.
