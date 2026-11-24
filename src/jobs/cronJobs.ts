@@ -9,6 +9,8 @@ import { businessesWithPush, pushEnabled, sendPushToBusiness } from '../services
 import { reply, sendTemplate } from '../services/whatsapp.js';
 import { buildDailyPush } from '../flows/dailyPush.js';
 import { nudgeLine } from '../flows/onboarding.js';
+import { composeMorning, gatherMorning, tomorrowLine } from '../flows/morning.js';
+import { remindersOff } from '../flows/reminders.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
 
@@ -18,6 +20,7 @@ const TZ = 'Africa/Lagos';
 
 export async function registerSchedules(): Promise<void> {
   await cronQueue.upsertJobScheduler('hourly-maintenance', { pattern: '5 * * * *', tz: TZ }, { name: 'hourly' });
+  await cronQueue.upsertJobScheduler('daily-morning', { pattern: '0 7 * * *', tz: TZ }, { name: 'daily-morning' });
   await cronQueue.upsertJobScheduler('daily-checkin', { pattern: '0 21 * * *', tz: TZ }, { name: 'daily-checkin' });
   await cronQueue.upsertJobScheduler('daily-push', { pattern: '0 20 * * *', tz: TZ }, { name: 'daily-push' });
   await cronQueue.upsertJobScheduler('sunday-ceo', { pattern: '0 18 * * 0', tz: TZ }, { name: 'sunday-ceo' });
@@ -49,6 +52,35 @@ async function hourly(): Promise<void> {
   await db.rpc('purge_old_magic_tokens');
 }
 
+/**
+ * 7 AM WAT "who to follow up today" note. Same rule as the 9 PM one: ONLY inside the free 24-hour window ($0 Meta cost).
+ * Owners who haven't messaged for a day are reached by the free app notification instead, never by a paid template.
+ * Each note carries a button; tapping it counts as a message from the owner and keeps tomorrow's window open.
+ */
+async function dailyMorning(): Promise<void> {
+  const since = new Date(Date.now() - 23 * 3600_000).toISOString();
+  const { data: sessions } = await db.from('whatsapp_sessions').select('phone_number, business_id').gt('last_inbound_at', since).not('business_id', 'is', null);
+  const day = watDateKey();
+
+  for (const s of sessions ?? []) {
+    try {
+      const { data: b } = await db.from('businesses').select('*').eq('id', s.business_id as string).single();
+      const biz = b as Business | null;
+      if (!biz || biz.owner_phone !== s.phone_number) continue;         // owner only
+      if (!PLANS[biz.subscription_tier].dailyCheckin) continue;
+      if (await remindersOff(biz.id)) continue;                          // the owner said stop
+      if (!(await claimOutbound(biz.id, 'daily_morning', day))) continue;
+
+      const msg = composeMorning(await gatherMorning(biz));
+      const r = reply(biz.owner_phone).text(...msg.lines);
+      for (const btn of msg.buttons) r.button(btn.id, btn.title);
+      await r.send().catch(() => undefined);
+    } catch (err) {
+      console.error('[cron:daily-morning]', s.business_id, err);
+    }
+  }
+}
+
 /** 9 PM WAT Cash-in-Hand Reality Check — ONLY inside the free service window ($0 Meta cost). */
 async function dailyCheckin(): Promise<void> {
   const since = new Date(Date.now() - 23 * 3600_000).toISOString();
@@ -60,6 +92,7 @@ async function dailyCheckin(): Promise<void> {
     const biz = b as Business | null;
     if (!biz || biz.owner_phone !== s.phone_number) continue; // owner only; staff are audited via owner
     if (!PLANS[biz.subscription_tier].dailyCheckin) continue;
+    if (await remindersOff(biz.id)) continue;
     if (!(await claimOutbound(biz.id, 'daily_checkin', day))) continue;
 
     const { from, to } = periodRange('today');
@@ -86,6 +119,8 @@ async function dailyCheckin(): Promise<void> {
       }
       if (byStaff.size) r.text('', '👥 *Staff today:*', ...[...byStaff].map(([n, v]) => `• ${n}: ${ngn(v)}`));
     }
+    const tmr = await tomorrowLine(biz.id).catch(() => null); // what is due tomorrow
+    if (tmr) r.text('', tmr);
     const nudge = await nudgeLine(biz).catch(() => null); // new accounts: the one next thing to do
     if (nudge) r.text('', nudge);
     await r.send().catch(() => undefined);
@@ -159,6 +194,7 @@ export function startCronWorker() {
     async (job) => {
       switch (job.name) {
         case 'hourly': return hourly();
+        case 'daily-morning': return dailyMorning();
         case 'daily-checkin': return dailyCheckin();
         case 'daily-push': return dailyPush();
         case 'sunday-ceo': return sundayCeo();
@@ -168,4 +204,4 @@ export function startCronWorker() {
   );
 }
 
-export const __test = { hourly, dailyCheckin, dailyPush, sundayCeo };
+export const __test = { hourly, dailyMorning, dailyCheckin, dailyPush, sundayCeo };

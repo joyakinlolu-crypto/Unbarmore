@@ -34,6 +34,7 @@ import {
 } from '../flows/records.js';
 import { clientStats, customerMessagesReply, lapsedText, myClientsText } from '../flows/clients.js';
 import { checklistReply } from '../flows/onboarding.js';
+import { setReminders } from '../flows/reminders.js';
 import { adminStatsReply, isAdmin, supportReply } from '../flows/platform.js';
 
 export interface InboundJob { msg: WaInboundMessage; profileName: string | null }
@@ -245,6 +246,7 @@ async function welcomeDone(phone: string, name: string, myCode: string, usedCode
     link ? `📲 *Your dashboard:* ${link}` : '📲 Type *DASHBOARD* any time for your charts and AI advisor.',
     link ? '_Open it, add it to your Home Screen, and tap "Turn on my evening alert". Every evening I\'ll show you what you made and who still owes you._' : '',
     '',
+    '⏰ I\'ll message you at *7 AM* (who to follow up today) and *9 PM* (how your day went). Reply *REMINDERS OFF* to pause.',
     `Type *START* any time to see your progress. Your referral code: *${myCode}*, share it and you both get ₦1,000.`,
   );
 }
@@ -345,6 +347,14 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (['WIN BACK', 'WINBACK', 'WIN-BACK'].includes(upper)) return customerMessagesReply(actor, 'winback');
   if (['THANK', 'THANK CUSTOMERS', 'THANK BEST CUSTOMERS', 'VIP'].includes(upper)) return customerMessagesReply(actor, 'thank_top');
   if (['START', 'GETTING STARTED', 'GUIDE', 'HOW IT WORKS', 'HOW DOES THIS WORK', 'HOW DOES IT WORK'].includes(upper)) return checklistReply(actor);
+  if (['REMINDERS OFF', 'STOP', 'UNSUBSCRIBE', 'STOP REMINDERS', 'MORNING OFF'].includes(upper) && !actor.isStaff) {
+    await setReminders(b.id, false);
+    return reply(actor.phone).text('✅ Done. I\'ll stop the 7 AM and 9 PM notes. Everything else still works. Type *REMINDERS ON* any time to turn them back on.');
+  }
+  if (['REMINDERS ON', 'START REMINDERS', 'MORNING ON'].includes(upper) && !actor.isStaff) {
+    await setReminders(b.id, true);
+    return reply(actor.phone).text('✅ Back on. You\'ll hear from me at 7 AM (who to follow up) and 9 PM (how your day went).');
+  }
   if (upper === 'CHASE') return chaseDebtsReply(actor);
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
@@ -512,6 +522,8 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       await setSession(actor.phone, 'IDLE', {});
       return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, null, actor.business.id);
     case 'BTN_CHASE_DEBT': return chaseDebtsReply(actor);
+    case 'WINBACK': return customerMessagesReply(actor, 'winback');
+    case 'LOGHOW': return reply(actor.phone).text('📝 Send a voice note or type it, like: _sold 2 lace 50k cash_ or _paid rent 150k_. I\'ll show it back for you to confirm.');
     case 'BTN_DEADSTOCK_PROMO': return deadStockPromoReply(actor);
     case 'BTN_EXPORT_PDF': return statementReply(actor);
     default:

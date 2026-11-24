@@ -139,3 +139,9 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - Until migration 005 is run, every screen, message and PDF says **"Cash left"** (sales − expenses − stock bought), never "profit". Code reads the new columns only if they exist.
 - SQL test: `psql -v ON_ERROR_STOP=1 -f supabase/tests/005_profit_test.sql` on a scratch database with 001–005 (sales 210k − goods 150k − rent 10k = 50k with 150k stock bought kept out; unknown costs flagged; cost frozen at sale; undo; no public access).
 - New expense categories: Bank/POS charges, Repairs, Taxes/Levies.
+
+## 7 AM "who to follow up" + 9 PM notes
+- **7 AM (Lagos)**: yesterday's result, then who to follow up TODAY: debts overdue / due today / due soon (using the due dates owners give), the oldest undated debt, a customer who has gone quiet, an item nearly out; ONE "start with…" action; buttons *Chase debts / Win back / Log a sale*. Works for shops and service businesses (nothing assumes stock). **9 PM**: how the day went + what is due tomorrow.
+- **Free by design**: sent only to owners who messaged in the last 23 hours (inside WhatsApp's free window). Every button tap counts as a message from the owner, which keeps the window open for the next note. Owners outside the window get the free app notification instead; we never send a paid template unprompted.
+- **Control**: `REMINDERS OFF` / `STOP` pauses both notes (remembered in `outbound_log`, kind `reminders_off`), `REMINDERS ON` resumes. The welcome message tells new owners the schedule and how to pause.
+- Test against the real database with a pretend WhatsApp: `set -a; . ./.env; set +a; npx tsx scripts/live-morning.mts`.

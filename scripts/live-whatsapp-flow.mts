@@ -163,7 +163,7 @@ try {
   r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text));
   ok('tap Skip → welcome with examples and the referral code', !!r.reply && /UNBAR-/.test(r.reply.text));
   const welcomeText = r.reply?.text ?? '';
-  ok('welcome gives 3 clear first steps (tell me a sale · tell me who owes you · make a receipt), mentions photos/screenshots and "ask me anything", and says how to see progress (START)', /Start with these 3 steps/.test(welcomeText) && /Tell me a sale/.test(welcomeText) && /who owes you/i.test(welcomeText) && /receipt/i.test(welcomeText) && /photos/.test(welcomeText) && /screenshot/.test(welcomeText) && /ask me anything about your business/i.test(welcomeText) && /START/.test(welcomeText), welcomeText.replace(/\n/g, ' | ').slice(0, 200));
+  ok('welcome gives 3 clear first steps (tell me a sale · tell me who owes you · make a receipt), mentions photos/screenshots and "ask me anything", and says how to see progress (START)', /Start with these 3 steps/.test(welcomeText) && /Tell me a sale/.test(welcomeText) && /who owes you/i.test(welcomeText) && /receipt/i.test(welcomeText) && /photos/.test(welcomeText) && /screenshot/.test(welcomeText) && /ask me anything about your business/i.test(welcomeText) && /START/.test(welcomeText) && /7 AM/.test(welcomeText) && /9 PM/.test(welcomeText) && /REMINDERS OFF/.test(welcomeText), welcomeText.replace(/\n/g, ' | ').slice(0, 200));
   ok('welcome carries a one-tap dashboard link + the "evening alert" instruction', /auth\/verify\?token=[a-f0-9]{64}/.test(welcomeText) && /Turn on my evening alert/.test(welcomeText) && /Home Screen/.test(welcomeText));
   ok('that was ONE welcome message', real(r.all).length === 1, `${real(r.all).length} message(s)`);
 
@@ -564,6 +564,19 @@ try {
   ok('database: Gele now has cost price ₦3,000', Number(gele2?.cost_price_ngn) === 3000, JSON.stringify(gele2));
   r = await ask('profit-q', () => text('what is my profit this month'), (v) => /Profit|Cash left/.test(v.text), 40_000);
   ok('"what is my profit" → a labelled breakdown: Sales, then Profit (or honestly "Cash left" until cost prices are set up), and stock bought is explained as not a cost', !!r.reply && /Sales:/.test(r.reply.text) && /(Profit|Cash left):/.test(r.reply.text) && /Stock bought/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 300));
+
+  // ───── morning/evening notes: pause, resume, and the buttons on them ─────
+  r = await ask('reminders-off', () => text('REMINDERS OFF'), (v) => /stop the 7 AM and 9 PM/i.test(v.text));
+  ok('REMINDERS OFF → confirmed, and remembered in the database', !!r.reply && (await rows(`outbound_log?business_id=eq.${biz!.id}&kind=eq.reminders_off&select=id`)).length === 1);
+  r = await ask('reminders-on', () => text('REMINDERS ON'), (v) => /Back on/i.test(v.text));
+  ok('REMINDERS ON → back, and the pause is removed', !!r.reply && (await rows(`outbound_log?business_id=eq.${biz!.id}&kind=eq.reminders_off&select=id`)).length === 0);
+  r = await ask('stop', () => text('STOP'), (v) => /stop the 7 AM and 9 PM/i.test(v.text));
+  ok('"STOP" is honoured the same way (WhatsApp policy)', !!r.reply);
+  await ask('stop-undo', () => text('reminders on'), (v) => /Back on/i.test(v.text));
+  r = await ask('loghow', () => button('LOGHOW'), (v) => /Send a voice note or type it/.test(v.text));
+  ok('the morning note\'s [📝 Log a sale] button answers with how to log one', !!r.reply);
+  r = await ask('winback-btn', () => button('WINBACK'), (v) => v.text.length > 10, 40_000);
+  ok('the morning note\'s [👋 Win back] button works', !!r.reply && /Nobody has gone quiet|Win-back messages/.test(r.reply.text), r.reply?.text.slice(0, 80));
 
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));
