@@ -2,7 +2,7 @@ import { DelayedError, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
 import { env } from '../config/env.js';
-import { PLANS, PRICES_NGN, TRIAL_DAYS } from '../config/plans.js';
+import { ADVICE_PER_DAY, PLANS, PRICES_NGN, TRIAL_DAYS } from '../config/plans.js';
 import {
   addStaff, claimMessageId, findBusinessByReferralCode, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
   resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, createBusiness,
@@ -10,6 +10,7 @@ import {
 } from '../db/supabase.js';
 import { imageBatchQueue, QUEUE, redisConnection } from '../lib/queues.js';
 import { ngn, watDateKey } from '../lib/money.js';
+import { dailyCount } from '../lib/rateLimit.js';
 import { generateStructured, readBankAlert, routeMessage, type BrainResult } from '../services/geminiBrain.js';
 import { connectSheet, extractSheetId, SHEETS_SERVICE_EMAIL } from '../services/googleSheets.js';
 import { createCheckoutLink, paymentsLive, PaymentsNotLiveError } from '../services/paystack.js';
@@ -170,8 +171,11 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
     const code = text.match(REF_RE)?.[0]?.toUpperCase() ?? null;
     await setSession(phone, 'ONBOARDING_NAME', { referral_code: code });
     return reply(phone).text(
-      `👋 Welcome to *Unbarmore*${profileName ? `, ${profileName.split(' ')[0]}` : ''}!`,
-      'I make your sales videos, track your money from voice notes, and catch fake transfer alerts — all inside WhatsApp.',
+      `👋 Welcome to *Unbarmore*${profileName ? `, ${profileName.split(' ')[0]}` : ''}! I'm your pocket business manager on WhatsApp:`,
+      '💰 Track sales, expenses and who owes you. Just talk or send a voice note.',
+      '🎬 Turn product photos into sales videos.',
+      '🛡️ Check transfer alerts for fakes.',
+      '💬 Answer your business questions.',
       '',
       code ? `🎁 Referral code ${code} saved — you both get ₦1,000 when you subscribe.` : '',
       '*What is your business name?*',
@@ -186,7 +190,7 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
     if (savedCode) {
       const ok = await applyReferral(biz.id, savedCode);
       await setSession(phone, 'IDLE', {}, biz.id);
-      return welcomeDone(phone, name, biz.referral_code, ok ? savedCode : null);
+      return welcomeDone(phone, name, biz.referral_code, ok ? savedCode : null, biz.id);
     }
     await setSession(phone, 'ONBOARDING_REFERRAL', {}, biz.id);
     return reply(phone)
@@ -207,17 +211,23 @@ async function applyReferral(businessId: string, code: string): Promise<boolean>
   return true;
 }
 
-function welcomeDone(phone: string, name: string, myCode: string, usedCode: string | null): Reply {
+/** The message that turns a signup into a habit: what to do right now, where the dashboard is, and how to get the evening alert. */
+async function welcomeDone(phone: string, name: string, myCode: string, usedCode: string | null, businessId: string): Promise<Reply> {
+  const link = await createOwnerMagicLink(businessId).catch(() => null); // never let a link problem block a welcome
   return reply(phone).text(
-    `🎉 You're in, *${name}*! Free trial: ${PLANS.trial.videos_used_this_month} short videos · ${PLANS.trial.tx_logged_this_month} logged messages · ${PLANS.trial.ocr_scans_used_this_month} alert checks.`,
+    `🎉 You're in, *${name}*! Your ${TRIAL_DAYS}-day free trial has started: ${PLANS.trial.videos_used_this_month} short videos · ${PLANS.trial.tx_logged_this_month} logged messages · ${PLANS.trial.ocr_scans_used_this_month} alert checks.`,
     usedCode ? `🎁 Referral ${usedCode} applied.` : '',
     '',
     '*Try one now:*',
     '🎙️ Voice note: _"Sold 2 lace 50k, transfer 30k, balance 20k Mama Tunde"_',
     '📸 Send 3–5 photos of a product → I make a sales video',
     '🧾 Send a transfer screenshot → I check if it\'s fake',
+    '💬 Or just ask me about your business: _"How do I price my ankara gowns?"_',
     '',
-    `Your referral code: *${myCode}* — share it, you both get ₦1,000.`,
+    link ? `📲 *Your dashboard:* ${link}` : '📲 Type *DASHBOARD* any time for your charts and AI advisor.',
+    link ? '_Open it, add it to your Home Screen, and tap "Turn on my evening alert". Every evening I\'ll show you what you made and who still owes you._' : '',
+    '',
+    `Your referral code: *${myCode}*. Share it and you both get ₦1,000. Type HELP any time.`,
   );
 }
 
@@ -238,7 +248,7 @@ async function onState(actor: Actor, text: string, session: Session): Promise<Re
       const code = text.match(REF_RE)?.[0]?.toUpperCase();
       const ok = code ? await applyReferral(actor.business.id, code) : false;
       if (code && !ok) return reply(actor.phone).text(`Hmm, ${code} isn't valid — no wahala, you're set up anyway.`).text('', 'Send a voice note or product photos to start.');
-      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, ok ? code! : null);
+      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, ok ? code! : null, actor.business.id);
     }
     case 'AWAITING_VIDEO_DETAILS': {
       const d = await generateStructured({
@@ -397,6 +407,7 @@ function helpMenu(actor: Actor): Reply {
     '🧾 Transfer screenshot → fake-alert check',
     '❓ Ask: "who owes me?", "profit this week"',
     '💬 Paste a customer\'s "too cost" → closing replies',
+    '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
     '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 🆘 SUPPORT',
@@ -464,7 +475,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     }
     case 'ONB_SKIP':
       await setSession(actor.phone, 'IDLE', {});
-      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, null);
+      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, null, actor.business.id);
     case 'BTN_CHASE_DEBT': return chaseDebtsReply(actor);
     case 'BTN_DEADSTOCK_PROMO': return deadStockPromoReply(actor);
     case 'BTN_EXPORT_PDF': return statementReply(actor);
@@ -538,6 +549,15 @@ async function runBrain(
     }
     case 'QUERY_BUSINESS':
       return reply(actor.phone).text(await answerQuery(actor.business, brain.query ?? { kind: 'profit' }));
+    case 'BUSINESS_ADVICE': {
+      const advisor = `${env.WEB_APP_URL.replace(/\/$/, '')}/advisor`;
+      const { ok, n } = await dailyCount(redis, `advice:${actor.phone}:${watDateKey()}`, ADVICE_PER_DAY);
+      if (!ok) return reply(actor.phone).text(`💬 That's my ${ADVICE_PER_DAY} chat answers for today on WhatsApp. For deeper help any time, open your advisor: ${advisor}`);
+      const r = reply(actor.phone).text(brain.reply_text ?? 'Tell me a little more about your business and what you want to improve.');
+      // The link on the first answer of the day and every 5th: useful, never nagging.
+      if (n === 1 || n % 5 === 0) r.text('', `📲 Charts + a deeper advisor that knows your numbers: ${advisor}`);
+      return r;
+    }
     case 'HELP':
       return reply(actor.phone).text(brain.reply_text ?? '', '', 'Type MENU to see everything I can do.');
     case 'OFF_TOPIC':

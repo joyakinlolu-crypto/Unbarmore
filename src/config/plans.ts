@@ -43,6 +43,9 @@ export const PLANS: Record<Tier, PlanCaps> = {
   },
 };
 
+/** Business-advice chat on WhatsApp: replies per owner per day (keeps AI cost predictable; deeper help lives in the web advisor). */
+export const ADVICE_PER_DAY = 20;
+
 /** Free trial length. Applied when a business is created (the SQL column default of 7 days is overridden in code). */
 export const TRIAL_DAYS = 14;
 

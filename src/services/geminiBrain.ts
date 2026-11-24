@@ -45,7 +45,7 @@ export type BankAlert = z.infer<typeof BankAlertSchema>;
 export const QUERY_KINDS = ['profit', 'debtors', 'top_products', 'dead_stock', 'expenses_by_category', 'stock_level', 'cash_today'] as const;
 
 export const BrainSchema = z.object({
-  intent: z.enum(['LOG_TRANSACTION', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT', 'QUERY_BUSINESS', 'HELP', 'OFF_TOPIC']),
+  intent: z.enum(['LOG_TRANSACTION', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT', 'QUERY_BUSINESS', 'BUSINESS_ADVICE', 'HELP', 'OFF_TOPIC']),
   language: z.enum(['english', 'pidgin', 'yoruba', 'hausa', 'igbo']).describe('Language the user spoke/wrote in. Reply in the same register.'),
   transcript: z.string().optional().describe('Verbatim transcript if input was a voice note.'),
   transactions: z.array(TxnLineSchema).optional(),
@@ -67,7 +67,7 @@ export const BrainSchema = z.object({
       product_name: z.string().optional(),
     })
     .optional(),
-  reply_text: z.string().optional().describe('Only for HELP or OFF_TOPIC: short friendly reply in the user\'s language.'),
+  reply_text: z.string().optional().describe('Only for HELP, BUSINESS_ADVICE or OFF_TOPIC: the reply text in the user\'s language.'),
 });
 export type BrainResult = z.infer<typeof BrainSchema>;
 
@@ -181,8 +181,10 @@ Classify the message into exactly one intent and fill ONLY that intent's field:
   Write 2 warm, confident Nigerian closing replies: one value-anchoring, one urgency/scarcity or bundle. Never insult. Never discount more than 10% unless the user said so.
 - CREATE_VIDEO_SCRIPT → "video_request". User wants an ad/video/promo for a product. Extract any name, price, delivery info.
 - QUERY_BUSINESS → "query". Questions about their own numbers: profit, who owes, best sellers, slow stock, expenses, stock left, cash today.
+- BUSINESS_ADVICE → practical questions about running or growing THEIR business that are not about their own recorded numbers: pricing, marketing, getting and keeping customers, handling debtors or suppliers, stock, cash flow, hiring, record keeping, how to use Unbarmore.
+  reply_text: a direct, practical answer in the user's language and register, max 90 words, Nigerian market context, ending with one concrete next step. Use plain text (no markdown headings). Never invent their numbers: if they want their own figures that is QUERY_BUSINESS.
 - HELP → greetings, "what can you do", pricing questions about Unbarmore itself. reply_text: 2 short lines.
-- OFF_TOPIC → anything not about running THIS business (essays, politics, trivia, homework, relationships, general chat).
+- OFF_TOPIC → anything not about running a business at all (essays, politics, trivia, homework, relationships, general chat).
   reply_text: politely say you only help with sales, videos and bookkeeping for their business. No exceptions.
 
 Voice notes may be English, Nigerian Pidgin, Yoruba, Hausa or Igbo — transcribe into "transcript" and set "language".

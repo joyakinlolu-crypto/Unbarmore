@@ -162,6 +162,10 @@ try {
 
   r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text));
   ok('tap Skip → welcome with examples and the referral code', !!r.reply && /UNBAR-/.test(r.reply.text));
+  const welcomeText = r.reply?.text ?? '';
+  ok('welcome shows what to do now: voice note, photos, screenshot — and "just ask me" chat', /Voice note/.test(welcomeText) && /photos/.test(welcomeText) && /screenshot/.test(welcomeText) && /ask me about your business/i.test(welcomeText), welcomeText.replace(/\n/g, ' | ').slice(0, 200));
+  ok('welcome carries a one-tap dashboard link + the "evening alert" instruction', /auth\/verify\?token=[a-f0-9]{64}/.test(welcomeText) && /Turn on my evening alert/.test(welcomeText) && /Home Screen/.test(welcomeText));
+  ok('that was ONE welcome message', real(r.all).length === 1, `${real(r.all).length} message(s)`);
 
   // ───── 4–7. ledger: propose → confirm → debts → undo ─────
   r = await ask('sale', () => text('sold 2 lace 50k, paid 30k transfer, balance 20k Mama Tunde. bought fuel 5k'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
@@ -220,18 +224,22 @@ try {
   r = await ask('offtopic', () => text('Write me a 500 word essay on Nigerian politics'), (v) => /only help|can only|cannot assist|sales, video/i.test(v.text));
   ok('off-topic request is politely declined (Meta policy)', !!r.reply, r.reply?.text);
 
+  // ───── beyond bookkeeping: a pocket business advisor ─────
+  r = await ask('advice', () => text('how do i price my ankara gowns so i actually make profit and not just sell cheap?'), (v) => /\/advisor/.test(v.text) || v.text.length > 120, 60_000);
+  const adv = r.reply?.text ?? '';
+  ok('a real business question gets a practical answer (not the off-topic refusal) with a link to the full advisor', adv.length > 100 && !/only help with|I only/i.test(adv.split('\n')[0] ?? '') && /localhost:3333\/advisor/.test(adv), adv.replace(/\n/g, ' | ').slice(0, 260));
+  ok('…and it records nothing in the books', Number((await rows(`transactions?business_id=eq.${biz!.id}&select=id&tx_type=eq.expense&description=ilike.*price*`)).length) === 0);
+
   r = await ask('objection', () => text("customer say 'too cost, I go think about it'. the gown na 15k, wetin I fit reply?"), (v) => /Option 1/i.test(v.text) && /Option 2/i.test(v.text));
   ok('customer objection → 2 ready-to-send closing replies', !!r.reply);
 
   // ───── 12. voice note (audio made by Gemini TTS, transcribed by the bot's Gemini router) ─────
   try {
-    const beta = new GoogleGenAI({ apiKey: GKEY, httpOptions: { apiVersion: 'v1beta', timeout: 45_000 } });
+    // The app's own voice function (tries the backup speech model when the main one is out of quota).
+    const { synthesizeVoiceover } = await import('../src/services/ttsService.ts');
     let wav: Buffer | null = null;
     for (let i = 0; i < 3 && !wav; i++) {
-      try {
-        const sp = await beta.models.generateContent({ model: 'gemini-3.8-flash-lite-tts', contents: 'Say in a relaxed Lagos accent: I don sell three ankara for forty five thousand naira cash, and I buy transport three thousand', config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } } } });
-        wav = Buffer.from(sp.candidates![0]!.content!.parts![0]!.inlineData!.data!, 'base64');
-      } catch { await sleep(3000); }
+      try { wav = (await synthesizeVoiceover('I don sell three ankara for forty five thousand naira cash, and I buy transport three thousand naira.')).data; } catch { await sleep(4000); }
     }
     if (!wav) throw new Error('could not synthesise test audio');
     media.set('VOICE1', { data: wav, mime: 'audio/wav' });
@@ -399,11 +407,11 @@ try {
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
     let said = '';
-    for (let i = 0; i < 3 && !said; i++) {
+    for (let i = 0; i < 6 && !said; i++) { // Google's text models have brief overload spikes: alternate models and retry
       try {
-        const tr = await ai.models.generateContent({ model: process.env.GEMINI_TEXT_MODEL ?? 'gemini-3.1-flash-lite', contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data: fs.readFileSync(wav).toString('base64') } }, { text: 'Transcribe every spoken word exactly. Output only the words.' }] }] });
+        const tr = await ai.models.generateContent({ model: i % 2 === 0 ? (process.env.GEMINI_TEXT_MODEL ?? 'gemini-3.1-flash-lite') : 'gemini-3.5-flash-lite', contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data: fs.readFileSync(wav).toString('base64') } }, { text: 'Transcribe every spoken word exactly. Output only the words.' }] }] });
         said = (tr.text ?? '').trim();
-      } catch { await sleep(3000); }
+      } catch { await sleep(4000); }
     }
     console.log(`   🎙️  the voice says: "${said.replace(/\n/g, ' ')}"`);
     ok('the voice speaks ONLY the ad: no spoken instructions ("read this advert…", "accent", "do not add anything")', said.length > 10 && !/read this|do not add|accent|market seller|energetic/i.test(said), said.slice(0, 160));
