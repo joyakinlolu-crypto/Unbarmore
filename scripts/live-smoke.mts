@@ -87,7 +87,8 @@ try {
   // ── 3. Analytics come from SQL ──
   const now = new Date(), from = new Date(now.getTime() - 864e5), to = new Date(now.getTime() + 864e5);
   const sum = await S.ledgerSummary(biz.id, from, to);
-  ok('ledger_summary: revenue 50,000 · costs 45,000 · profit 5,000', sum.revenue_ngn === 50000 && sum.expenses_ngn === 5000 && sum.restock_ngn === 40000 && sum.net_profit_ngn === 5000, JSON.stringify(sum));
+  // True profit (migration 005): stock bought (₦40,000) is NOT a cost; lace cost price unknown → profit shown as 'up to', flagged by unpriced_revenue.
+  ok('ledger_summary: revenue 50,000 · expenses 5,000 · restock excluded · profit up to 45,000 (cost unknown)', sum.revenue_ngn === 50000 && sum.expenses_ngn === 5000 && sum.restock_ngn === 40000 && sum.net_profit_ngn === 45000 && sum.unpriced_revenue_ngn === 50000, JSON.stringify(sum));
   const series = await db.rpc('ledger_series', { p_business_id: biz.id, p_from: from.toISOString(), p_to: to.toISOString(), p_bucket: 'day' });
   ok('ledger_series (web chart) returns rows', !series.error && (series.data as unknown[]).length >= 1, series.error?.message ?? '');
   const top = await S.topProducts(biz.id, from, to);
