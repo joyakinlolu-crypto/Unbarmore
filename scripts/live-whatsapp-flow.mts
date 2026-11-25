@@ -540,6 +540,23 @@ try {
   ok('"LOGO" → asks for the picture', !!r.reply);
   r = await ask('logo-photo', () => webhook({ type: 'image', image: { id: 'LOGO1', mime_type: 'image/jpeg' } }), (v) => /Logo saved/.test(v.text), 40_000);
   ok('sending the picture saves it as the logo (not treated as a product photo / video request)', !!r.reply && /Logo saved/.test(r.reply.text), r.reply?.text);
+
+  // ───── MY NUMBER: the WhatsApp number printed on videos ─────
+  const has006 = (await fetch(`${process.env.SUPABASE_URL}/rest/v1/businesses?select=sales_phone&limit=1`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } })).ok;
+  console.log(`   ℹ️  database has migration 006 (sales_phone): ${has006 ? 'YES' : 'NO — testing the graceful path'}`);
+  r = await ask('mynumber-show', () => text('MY NUMBER'), (v) => /Customers see/.test(v.text));
+  ok('MY NUMBER shows the number customers see on videos (the owner\'s own by default) and how to change it', !!r.reply && /0900 000 0401/.test(r.reply.text) && /MY NUMBER 0803/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+  r = await ask('mynumber-bad', () => text('my number 12345'), (v) => /doesn.t look right/.test(v.text));
+  ok('a bad number is refused with an example (nothing saved)', !!r.reply, r.reply?.text.replace(/\n/g, ' | '));
+  r = await ask('mynumber-set', () => text('MY NUMBER 0803 123 4567'), (v) => /Your next videos|couldn.t save/.test(v.text));
+  if (has006) {
+    ok('MY NUMBER 0803… saves it: "next videos will show 0803 123 4567", old videos keep the old one', !!r.reply && /0803 123 4567/.test(r.reply.text) && /already made/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
+    ok('…stored in international format in the database', (await rows(`businesses?id=eq.${biz!.id}&select=sales_phone`))[0]?.sales_phone === '2348031234567');
+    r = await ask('mynumber-reset', () => text('MY NUMBER RESET'), (v) => /Your next videos/.test(v.text));
+    ok('MY NUMBER RESET goes back to the number they chat from', !!r.reply && /0900 000 0401/.test(r.reply.text) && (await rows(`businesses?id=eq.${biz!.id}&select=sales_phone`))[0]?.sales_phone === null);
+  } else {
+    ok('without migration 006 the bot says it could not save (no crash, no false "saved")', !!r.reply && /couldn.t save/i.test(r.reply.text) && !/Your next videos/.test(r.reply.text), r.reply?.text);
+  }
   const logoPath = String((await rows(`businesses?id=eq.${biz!.id}&select=logo_url`))[0]?.logo_url ?? '');
   ok('database: logo_url points at the stored logo', logoPath === `${biz!.id}/logo.png`, logoPath);
   r = await ask('receipt-with-logo', () => text('RECEIPT Mama'), (v) => v.kind === 'document');

@@ -8,6 +8,7 @@ import { MINI_VIDEO, PLANS } from '../config/plans.js';
 import { db, downloadFile, getBusiness, getProduct, refundQuota, signedUrl, uploadFile } from '../db/supabase.js';
 import { QUEUE, redisConnection, type VideoJob } from '../lib/queues.js';
 import { ngn } from '../lib/money.js';
+import { displayPhone } from '../lib/phone.js';
 import { writeVideoScript, type VideoScript } from '../services/geminiBrain.js';
 import { enhanceProductPhoto, type StudioTheme } from '../services/imageStudio.js';
 import { synthesizeVoiceover } from '../services/ttsService.js';
@@ -39,13 +40,6 @@ export interface RenderInput {
   fontPath: string;
   outPath: string;
   workDir: string;
-}
-
-/** 2348107136951 → "0810 713 6951" (how Nigerians dial it). Returns null for anything that doesn't look like a Nigerian mobile. */
-export function displayPhone(e164: string | null | undefined): string | null {
-  const d = String(e164 ?? '').replace(/\D/g, '');
-  const local = d.startsWith('234') && d.length === 13 ? `0${d.slice(3)}` : d.length === 11 && d.startsWith('0') ? d : null;
-  return local ? `${local.slice(0, 4)} ${local.slice(4, 7)} ${local.slice(7)}` : null;
 }
 
 const probeDuration = (file: string) =>
@@ -249,7 +243,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
 
     // Step 2 — script + Nigerian voiceover
     const price = Number(product.selling_price_ngn) || null;
-    const shopPhone = displayPhone(business.owner_phone);
+    const shopPhone = displayPhone(business.sales_phone ?? business.owner_phone);
     const script: VideoScript = await writeVideoScript({
       businessName: business.name, productName: product.name, priceNgn: price, deliveryInfo: row.delivery_info as string | null,
       clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin', mini,
@@ -286,6 +280,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
         '',
         `👉 Post it to your WhatsApp Status and forward it to customers.${shopPhone ? ` Your number *${shopPhone}* is on the video, so they know where to order.` : ''}`,
         `When someone buys, just tell me: _"sold 1 ${product.name}"_ and I'll log it.`,
+        ...(shopPhone ? [`_Wrong number on it? Reply *MY NUMBER 0803 123 4567* and your next videos will use that one._`] : []),
         `_(${(bytes / 1024 / 1024).toFixed(1)}MB — light on data)_`,
         ...(mini ? ['', '🎞️ This is a ~10-second preview. Starter makes full 15–18 second HD ads.'] : []),
       )

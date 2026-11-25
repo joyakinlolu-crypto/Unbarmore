@@ -18,6 +18,8 @@ export interface Business {
   id: string;
   name: string;
   owner_phone: string;
+  /** The number customers should message (shown on videos). null = owner_phone. Needs migration 006. */
+  sales_phone?: string | null;
   business_category: string | null;
   rc_number: string | null;
   logo_url: string | null;

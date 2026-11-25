@@ -26,11 +26,12 @@ import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/r
 import { startVideo } from '../flows/video.js';
 import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
+import { displayPhone } from '../lib/phone.js';
 import { closeShopReply } from '../flows/close.js';
 import { AWAIT_LOGO_KEY, AWAIT_LOGO_TTL_S, logoAskReply, saveLogo, useNameAsLogo } from '../flows/branding.js';
 import { customerReceiptReply, latestReceiptBatch } from '../flows/receipts.js';
 import {
-  ACKNOWLEDGE_REPLY, cancelAction, confirmAction, CORRECT_LAST_REPLY, notSupportedReply, owingContext, proposeClients, proposeDebts, proposeProducts, saveCustomerPhone, undoAction,
+  ACKNOWLEDGE_REPLY, cancelAction, confirmAction, CORRECT_LAST_REPLY, notSupportedReply, owingContext, proposeClients, proposeDebts, normalisePhone as normaliseNgPhone, proposeProducts, saveCustomerPhone, undoAction,
 } from '../flows/records.js';
 import { clientStats, customerMessagesReply, lapsedText, myClientsText } from '../flows/clients.js';
 import { checklistReply } from '../flows/onboarding.js';
@@ -353,6 +354,8 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (/^who dey owe me\??$/i.test(t)) return reply(actor.phone).text(await answerQuery(b, { kind: 'debtors' }));
   const rcpt = t.match(/^receipt(?:\s+(.{2,40}))?$/i);
   if (rcpt) { const who = rcpt[1]?.trim(); return customerReceiptReply(actor, await latestReceiptBatch(actor, who), who); }
+  const num = t.match(/^(?:my|sales|shop|video) (?:whatsapp )?number(?:\s+(.+))?$/i);
+  if (num && !actor.isStaff) return setSalesNumber(actor, num[1]?.trim());
   if (upper === 'LOGO' && !actor.isStaff) { await redis.set(AWAIT_LOGO_KEY(actor.phone), '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
   if (['LOGO REMOVE', 'NO LOGO', 'REMOVE LOGO'].includes(upper) && !actor.isStaff) { await useNameAsLogo(actor); return reply(actor.phone).text('✅ Done. Your business name is now your logo on receipts.'); }
   if (['MY CLIENTS', 'MY CUSTOMERS', 'CLIENTS', 'CUSTOMERS'].includes(upper)) return reply(actor.phone).text(myClientsText(await clientStats(b.id)));
@@ -453,7 +456,7 @@ function helpMenu(actor: Actor): Reply {
     '🧾 Transfer screenshot → fake-alert check',
     '❓ Ask: "who owes me?", "profit this week"',
     '💬 Paste a customer\'s "too cost" → closing replies',
-    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo)',
+    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo) · MY NUMBER (the number shown on your videos)',
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
@@ -677,6 +680,22 @@ async function askOrStartVideo(
     '',
     '_e.g. "Ankara gown, 15k, delivery Lagos 2k"_',
   );
+}
+
+/** MY NUMBER → show it · MY NUMBER 0803… → change it · MY NUMBER RESET → back to the number you chat with. Shown on videos made from now on. */
+async function setSalesNumber(actor: Actor, arg?: string): Promise<Reply> {
+  const r = reply(actor.phone);
+  const current = displayPhone(actor.business.sales_phone ?? actor.business.owner_phone);
+  if (!arg) return r.text(`📞 Customers see *${current ?? 'no number'}* on your videos.`, 'To change it: _MY NUMBER 0803 123 4567_', 'To go back to the number you chat with me from: _MY NUMBER RESET_');
+  const reset = /^(reset|default|remove|same)$/i.test(arg);
+  const phone = reset ? null : normaliseNgPhone(arg);
+  if (!reset && !phone) return r.text(`That number doesn't look right (${arg.slice(0, 20)}). Send the 11 digits, like _MY NUMBER 08031234567_.`);
+  try { await updateBusiness(actor.business.id, { sales_phone: phone }); }
+  catch (e) {
+    console.error('[sales_phone] update failed (migration 006 not applied?)', String((e as Error)?.message ?? e).slice(0, 200));
+    return r.text('I couldn\'t save that just now. Please try again later.');
+  }
+  return r.text(`✅ Your next videos will show *${displayPhone(phone ?? actor.business.owner_phone)}*.`, '_Videos you already made keep the old number._');
 }
 
 export async function flushImageBatch(phone: string): Promise<void> {
