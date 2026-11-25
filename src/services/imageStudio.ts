@@ -42,7 +42,9 @@ export async function enhanceProductPhoto(
     const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
     if (!part?.inlineData?.data) throw new Error('no image returned');
     return { data: Buffer.from(part.inlineData.data, 'base64'), mimeType: part.inlineData.mimeType ?? 'image/png', enhanced: true };
-  } catch {
+  } catch (err) {
+    // Never block the video, but never fail silently either: a 402/429 here means every video ships with un-cleaned photos.
+    console.error('[imageStudio] photo cleanup failed, using original:', String((err as Error)?.message ?? err).slice(0, 300));
     return { ...image, enhanced: false };
   }
 }
