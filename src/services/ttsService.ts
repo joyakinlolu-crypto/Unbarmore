@@ -26,8 +26,10 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
 /** Retry tuning (a test sets delayMs to 0). A busy or rate-limited speech model usually recovers within seconds. */
 export const ttsTuning = { rounds: 3, delayMs: 4000 };
 
-async function geminiTts(text: string): Promise<Voiceover> {
-  const models = [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL].filter((m, i, a) => m && a.indexOf(m) === i);
+async function geminiTts(text: string, yoruba = false): Promise<Voiceover> {
+  // The preview model understood Yoruba better in listening checks, so it goes first for Yoruba and second otherwise.
+  const order = yoruba ? [env.GEMINI_TTS_FALLBACK_MODEL, env.GEMINI_TTS_MODEL] : [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL];
+  const models = order.filter((m, i, a) => m && a.indexOf(m) === i);
   let lastErr: unknown;
   // Try every speech model, and if all are busy/out of quota, wait a moment and go round again: a silent ad is worse than a slow one.
   for (let round = 0; round < ttsTuning.rounds; round++) {
@@ -50,8 +52,8 @@ async function geminiTts(text: string): Promise<Voiceover> {
 }
 
 /** Nigerian-accented voiceover. Default provider "gemini" needs no extra account (uses GEMINI_API_KEY). */
-export async function synthesizeVoiceover(text: string, opts: { pidgin?: boolean } = {}): Promise<Voiceover> {
-  if (env.TTS_PROVIDER === 'gemini') return geminiTts(text);
+export async function synthesizeVoiceover(text: string, opts: { pidgin?: boolean; yoruba?: boolean } = {}): Promise<Voiceover> {
+  if (env.TTS_PROVIDER === 'gemini') return geminiTts(text, opts.yoruba);
   if (env.TTS_PROVIDER === 'azure') return { data: await azureTts(text), ext: 'mp3', mime: 'audio/mpeg' };
 
   gClient ??= new TextToSpeechClient();

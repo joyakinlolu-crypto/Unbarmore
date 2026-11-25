@@ -23,7 +23,8 @@ import {
   acceptMarginShield, bankAlertReply, confirmAndRespond, discardPending, linesToDrafts, MAX_LINES_PER_MESSAGE, proposeBatch, quotaReply, undoAndRespond,
 } from '../flows/ledger.js';
 import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/reports.js';
-import { startVideo } from '../flows/video.js';
+import { remakeLastVideo, startVideo } from '../flows/video.js';
+import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.js';
 import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { displayPhone } from '../lib/phone.js';
@@ -126,6 +127,7 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
 
   // Images are debounced (3–5 product photos arrive as separate webhooks within milliseconds).
   if (msg.type === 'image' && msg.image) {
+    await redis.set(`img_seen:${phone}`, '1', 'EX', 90);
     await redis.multi()
       .rpush(IMG_KEY(phone), JSON.stringify({ mediaId: msg.image.id, caption: msg.image.caption ?? '', mime: msg.image.mime_type }))
       .pexpire(IMG_KEY(phone), 120_000)
@@ -177,7 +179,13 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
 
   // A reaction (👍 on a message) is not a request: replying would spam the owner and cost a WhatsApp conversation.
   if (msg.type === 'reaction') return null;
-  console.warn('[inbound] unsupported message type from', phone.slice(-4), '→', msg.type);
+  console.warn('[inbound] unsupported message type from', phone.slice(-4), '→', msg.type, JSON.stringify((msg as { errors?: unknown }).errors ?? null).slice(0, 300));
+  if (msg.type === 'unsupported') {
+    // WhatsApp sends a hidden "unsupported" wrapper event alongside a multi-photo album. Do NOT wait here (that would hold this
+    // phone's processing lock and block the photos themselves): check a few seconds later, on the queue, whether photos arrived.
+    await imageBatchQueue.add('unsupported', { phone }, { delay: 7000, deduplication: { id: `unsupp:${phone}`, ttl: 7000 } });
+    return null;
+  }
   if (msg.type === 'video' || msg.type === 'document' || msg.type === 'sticker') {
     return reply(phone).text('I can\'t open that kind of file yet. Send product *photos*, a voice note, or type it: _"sold 3 Ankara 45k cash"_');
   }
@@ -281,6 +289,13 @@ async function onState(actor: Actor, text: string, session: Session): Promise<Re
       return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, ok ? code! : null, actor.business.id);
     }
     case 'AWAITING_VIDEO_DETAILS': {
+      // Deterministic first: "Cord lace, 17,500 for 5 yards, Yoruba" needs no AI guess.
+      const quick = parseVideoCaption(text);
+      if (quick) {
+        await setSession(actor.phone, 'IDLE', {});
+        return startVideo(actor, { productName: quick.name, priceNgn: quick.price, deliveryInfo: quick.delivery, rawPaths: (p.image_paths as string[]) ?? [], voice: quick.voice });
+      }
+      const wanted = detectVoice(text).voice;
       const d = await generateStructured({
         schema: VideoDetailsSchema,
         system: 'Extract product name, selling price in whole Naira ("15k"=15000) and delivery info from a Nigerian seller\'s message. pidgin=true if written in Pidgin.',
@@ -292,7 +307,7 @@ async function onState(actor: Actor, text: string, session: Session): Promise<Re
       await setSession(actor.phone, 'IDLE', {});
       return startVideo(actor, {
         productName: d.product_name, priceNgn: d.price_ngn, deliveryInfo: d.delivery_info ?? null,
-        rawPaths: (p.image_paths as string[]) ?? [], pidgin: d.pidgin,
+        rawPaths: (p.image_paths as string[]) ?? [], voice: wanted ?? (d.pidgin ? 'pidgin' : 'english'),
       });
     }
     case 'AWAITING_PAYOUT_DETAILS': {
@@ -354,6 +369,8 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (/^who dey owe me\??$/i.test(t)) return reply(actor.phone).text(await answerQuery(b, { kind: 'debtors' }));
   const rcpt = t.match(/^receipt(?:\s+(.{2,40}))?$/i);
   if (rcpt) { const who = rcpt[1]?.trim(); return customerReceiptReply(actor, await latestReceiptBatch(actor, who), who); }
+  const remake = t.match(/^(?:(yoruba|pidgin|english) video|video (?:in )?(yoruba|pidgin|english)|make (?:it|that|the video) (?:in )?(yoruba|pidgin|english))$/i);
+  if (remake && !actor.isStaff) return remakeLastVideo(actor, (remake[1] ?? remake[2] ?? remake[3])!.toLowerCase() as Voice);
   const num = t.match(/^(?:my|sales|shop|video) (?:whatsapp )?number(?:\s+(.+))?$/i);
   if (num && !actor.isStaff) return setSalesNumber(actor, num[1]?.trim());
   if (upper === 'LOGO' && !actor.isStaff) { await redis.set(AWAIT_LOGO_KEY(actor.phone), '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
@@ -651,14 +668,14 @@ async function runBrain(
 // ═════════════════════════ IMAGE BATCH (after 4s debounce) ═════════════════════════
 
 async function askOrStartVideo(
-  actor: Actor, images: { data: Buffer; mimeType: string }[], name?: string, price?: number, delivery?: string,
+  actor: Actor, images: { data: Buffer; mimeType: string }[], name?: string, price?: number, delivery?: string, voice?: Voice,
 ): Promise<Reply> {
   const paths: string[] = [];
   for (const [i, img] of images.entries()) {
     const ext = img.mimeType.split('/')[1] ?? 'jpg';
     paths.push(await uploadFile('raw-images', `${actor.business.id}/${Date.now()}-${i}.${ext}`, img.data, img.mimeType));
   }
-  if (name && price) return startVideo(actor, { productName: name, priceNgn: price, deliveryInfo: delivery ?? null, rawPaths: paths });
+  if (name && price) return startVideo(actor, { productName: name, priceNgn: price, deliveryInfo: delivery ?? null, rawPaths: paths, voice });
 
   // Late photos of the SAME set (a slow album arriving in pieces): add them to the pending photos instead of replacing them.
   const session = await getSession(actor.phone);
@@ -679,6 +696,7 @@ async function askOrStartVideo(
     '3️⃣ Delivery info (optional)',
     '',
     '_e.g. "Ankara gown, 15k, delivery Lagos 2k"_',
+    '_Want a Yoruba or Pidgin voice? Just add the word, like "…, Yoruba"._',
   );
 }
 
@@ -698,6 +716,13 @@ async function setSalesNumber(actor: Actor, arg?: string): Promise<Reply> {
   return r.text(`✅ Your next videos will show *${displayPhone(phone ?? actor.business.owner_phone)}*.`, '_Videos you already made keep the old number._');
 }
 
+/** Runs a few seconds after an "unsupported" message: silent if photos were arriving (an album), otherwise one helpful note per 10 minutes. */
+async function unsupportedNote(phone: string): Promise<void> {
+  if (await redis.exists(`img_seen:${phone}`)) return;
+  if (!(await redis.set(`unsupp_note:${phone}`, '1', 'EX', 600, 'NX'))) return;
+  await sendReplySafely(reply(phone).text('I couldn\'t open that. Please send product photos again (select them and send), a voice note, or type it.'), phone);
+}
+
 export async function flushImageBatch(phone: string): Promise<void> {
   const res = await redis.multi().lrange(IMG_KEY(phone), 0, -1).del(IMG_KEY(phone)).exec();
   const items = ((res?.[0]?.[1] as string[] | undefined) ?? []).map((s) => JSON.parse(s) as { mediaId: string; caption: string; mime: string });
@@ -709,7 +734,12 @@ export async function flushImageBatch(phone: string): Promise<void> {
   const images = await Promise.all(items.slice(0, 5).map((i) => downloadMedia(i.mediaId)));
 
   let r: Reply;
-  if (images.length === 1) {
+  // Photos + a caption with a name and a price = video details. Read deterministically: the AI router reads "Cord lace 17500" as
+  // "update my product prices" (and, for a single photo, silently dropped the picture).
+  const quick = parseVideoCaption(caption);
+  if (quick) {
+    r = await askOrStartVideo(actor, images, quick.name, quick.price, quick.delivery ?? undefined, quick.voice);
+  } else if (images.length === 1) {
     // One image is ambiguous: transfer screenshot, supplier receipt, or a single product photo. Let Gemini decide.
     r = await runBrain(actor, { image: { ...images[0]!, caption } }, await getSession(phone));
   } else {
@@ -727,7 +757,7 @@ export async function flushImageBatch(phone: string): Promise<void> {
 
 export function startMessageWorkers() {
   const inbound = new Worker<InboundJob>(QUEUE.inbound, processInbound, { connection: redisConnection, concurrency: 20 });
-  const images = new Worker<{ phone: string }>(QUEUE.imageBatch, async (job) => flushImageBatch(job.data.phone), { connection: redisConnection, concurrency: 10 });
+  const images = new Worker<{ phone: string }>(QUEUE.imageBatch, async (job) => (job.name === 'unsupported' ? unsupportedNote(job.data.phone) : flushImageBatch(job.data.phone)), { connection: redisConnection, concurrency: 10 });
 
   // Final failure → one apology, so the user is never left on "typing…".
   inbound.on('failed', (job, err) => {

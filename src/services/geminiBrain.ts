@@ -266,10 +266,13 @@ export async function writeVideoScript(p: {
   orderCode?: string;
   clearance?: boolean;
   pidgin?: boolean;
+  /** Voice language. 'yoruba' = Yoruba with the product name and price said in English words (Yoruba number words are unreliable). */
+  voice?: 'english' | 'pidgin' | 'yoruba';
   /** ~10-second preview (trial / free plan). */
   mini?: boolean;
 }): Promise<VideoScript> {
   const mini = !!p.mini;
+  const voice = p.voice ?? (p.pidgin ? 'pidgin' : 'english');
   return generateStructured({
     schema: videoScriptSchema(mini),
     temperature: 0.8,
@@ -277,6 +280,9 @@ export async function writeVideoScript(p: {
       (mini
         ? `You write 8–10 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is ${MINI_VIDEO.words} words, no more: a 2-second hook, the product and price, then a closing call to action: "Message us on WhatsApp to order" (the phone number is shown on screen; never say any phone number, code or digits aloud). `
         : 'You write 15–18 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is 28–32 words, no more (the voice speaks about two words a second). Hook in the first 2 seconds, one concrete benefit, price, a nudge to act now, then a closing call to action: "Message us on WhatsApp to order" (the phone number is shown on screen; never say any phone number, code or digits aloud). ') +
+      (voice === 'yoruba'
+        ? 'LANGUAGE: write the voiceover AND the 3 captions in Yoruba with correct tone marks and diacritics (ẹ, ọ, ṣ, à, á…), Lagos market-seller tone. Yoruba number words are easy to get wrong, so say the product name and the price in ENGLISH words inside the Yoruba sentence (e.g. "seventeen thousand five hundred naira"), never as digits and never in Yoruba number words. The call to action is the Yoruba for "Message us on WhatsApp to order". Set pidgin=false. '
+        : '') +
       'Never invent facts the owner did not give you: no customer counts ("500 happy customers"), no ratings, no "limited stock" or "few pieces left", no discounts, no delivery promises beyond the given delivery text. Natural Lagos tone. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
     parts: [{
       text: JSON.stringify({
@@ -285,7 +291,7 @@ export async function writeVideoScript(p: {
         price_ngn: p.priceNgn,
         delivery: p.deliveryInfo,
         style: p.clearance ? '48-HOUR CLEARANCE FLASH SALE — strong urgency, ends in 48 hours' : 'standard product ad',
-        language: p.pidgin ? 'Nigerian Pidgin' : 'Nigerian English',
+        language: voice === 'yoruba' ? 'Yoruba' : voice === 'pidgin' ? 'Nigerian Pidgin' : 'Nigerian English',
       }),
     }],
   });

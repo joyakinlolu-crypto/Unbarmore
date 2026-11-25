@@ -246,11 +246,11 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     const shopPhone = displayPhone(business.sales_phone ?? business.owner_phone);
     const script: VideoScript = await writeVideoScript({
       businessName: business.name, productName: product.name, priceNgn: price, deliveryInfo: row.delivery_info as string | null,
-      clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin', mini,
+      clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin', voice: row.voice_language === 'yoruba' ? 'yoruba' : row.voice_language === 'pidgin' ? 'pidgin' : 'english', mini,
     });
     let voicePath: string | null = null;
     try {
-      const vo = await synthesizeVoiceover(script.voiceover, { pidgin: script.pidgin });
+      const vo = await synthesizeVoiceover(script.voiceover, { pidgin: script.pidgin, yoruba: row.voice_language === 'yoruba' });
       voicePath = path.join(workDir, `vo.${vo.ext}`);
       await fs.writeFile(voicePath, vo.data);
       const audioPath = await uploadFile('videos', `${businessId}/${videoId}.${vo.ext}`, vo.data, vo.mime);
@@ -282,6 +282,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
         `When someone buys, just tell me: _"sold 1 ${product.name}"_ and I'll log it.`,
         ...(shopPhone ? [`_Wrong number on it? Reply *MY NUMBER 0803 123 4567* and your next videos will use that one._`] : []),
         `_(${(bytes / 1024 / 1024).toFixed(1)}MB — light on data)_`,
+        ...(row.voice_language === 'en-NG' ? ['', '🗣️ Want a Yoruba or Pidgin voice? Reply *YORUBA VIDEO* or *PIDGIN VIDEO*.'] : []),
         ...(mini ? ['', '🎞️ This is a ~10-second preview. Starter makes full 15–18 second HD ads.'] : []),
       )
       .send();

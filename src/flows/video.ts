@@ -4,11 +4,12 @@ import { videoQueue, type VideoJob } from '../lib/queues.js';
 import { ngn } from '../lib/money.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { quotaReply } from './ledger.js';
+import type { Voice } from '../lib/videoCaption.js';
 
 /** Creates the product lazily, records the job, enqueues the render. Returns the single acknowledgement reply. */
 export async function startVideo(
   actor: Actor,
-  p: { productName: string; priceNgn: number | null; deliveryInfo: string | null; rawPaths: string[]; clearance?: boolean; pidgin?: boolean },
+  p: { productName: string; priceNgn: number | null; deliveryInfo: string | null; rawPaths: string[]; clearance?: boolean; pidgin?: boolean; voice?: Voice },
 ): Promise<Reply> {
   if (!(await consumeQuota(actor.business, 'videos_used_this_month'))) return quotaReply(actor, 'videos_used_this_month');
 
@@ -17,15 +18,24 @@ export async function startVideo(
     await db.from('products').update({ selling_price_ngn: p.priceNgn, updated_at: new Date().toISOString() }).eq('id', product.id);
   }
   const plan = PLANS[actor.business.subscription_tier];
-  const { data, error } = await db.from('video_jobs').insert({
+  const wanted = p.voice ?? (p.pidgin ? 'pidgin' : 'english');
+  const insertJob = (voiceLanguage: string) => db.from('video_jobs').insert({
     business_id: actor.business.id,
     product_id: product.id,
     raw_image_urls: p.rawPaths,
     include_watermark: plan.watermark !== 'none',
     is_clearance: !!p.clearance,
     delivery_info: p.deliveryInfo,
-    voice_language: p.pidgin ? 'pidgin' : 'en-NG',
+    voice_language: voiceLanguage,
   }).select('id').single();
+  let { data, error } = await insertJob(wanted === 'yoruba' ? 'yoruba' : wanted === 'pidgin' ? 'pidgin' : 'en-NG');
+  let note: string | null = null;
+  if (error && wanted === 'yoruba') {
+    // The database rule that allows a Yoruba voice (migration 006) is not applied yet: still make the video, in English, and say so.
+    console.error('[video] Yoruba not allowed by the database yet (migration 006?):', error.message);
+    ({ data, error } = await insertJob('en-NG'));
+    note = '⚠️ The Yoruba voice is not switched on yet, so this video is in English.';
+  }
   if (error || !data) throw new Error(`video_jobs insert: ${error?.message}`);
 
   const job: VideoJob = { videoId: data.id as string, businessId: actor.business.id, phone: actor.phone };
@@ -34,6 +44,8 @@ export async function startVideo(
   return reply(actor.phone).text(
     `🎬 Making your ${p.clearance ? '48-hour flash-sale ' : ''}video for *${p.productName}*${p.priceNgn ? ` at ${ngn(p.priceNgn)}` : ''}.`,
     'Customers will see your WhatsApp number on it so they can order.',
+    ...(wanted === 'yoruba' && !note ? ['🗣️ Voice: Yoruba'] : []),
+    ...(note ? [note] : []),
     'It arrives here in about 2 minutes. Keep selling! 💪',
   );
 }
@@ -54,5 +66,21 @@ export async function startClearanceVideo(actor: Actor, b: Business, productId: 
     deliveryInfo: null,
     rawPaths: last.raw_image_urls as string[],
     clearance: true,
+  });
+}
+
+/** "YORUBA VIDEO": remake the owner's latest video (same photos, product, price) with a different voice. Counts as a new video. */
+export async function remakeLastVideo(actor: Actor, voice: Voice): Promise<Reply> {
+  const { data: last } = await db.from('video_jobs').select('product_id, raw_image_urls, delivery_info')
+    .eq('business_id', actor.business.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (!last?.raw_image_urls?.length) {
+    return reply(actor.phone).text('I don\'t have photos from an earlier video yet. Send 2–5 product photos first, and add the word *Yoruba* with the name and price, like _"Cord lace, 17,500, Yoruba"_.');
+  }
+  const { data: product } = await db.from('products').select('name, selling_price_ngn').eq('id', last.product_id).single();
+  if (!product) return reply(actor.phone).text('I couldn\'t find that product. Please send the photos again.');
+  return startVideo(actor, {
+    productName: product.name as string, priceNgn: Number(product.selling_price_ngn) || null,
+    deliveryInfo: (last.delivery_info as string | null) === 'null' ? null : (last.delivery_info as string | null),
+    rawPaths: last.raw_image_urls as string[], voice,
   });
 }

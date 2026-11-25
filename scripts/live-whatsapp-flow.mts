@@ -440,6 +440,64 @@ try {
   console.log(`   ℹ️  photo clean-up by the image model: ${vj?.cleaned_image_urls?.length ? 'used' : 'skipped (image quota) — original photos were used, as designed'}`);
   ok('video quota charged once (trial: 1 of 5)', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === 1);
 
+  // ───── Photos WITH a caption = video details: no "Got 3 photos!" question (it used to ask for name and price again) ─────
+  const hasMig006 = (await fetch(`${process.env.SUPABASE_URL}/rest/v1/businesses?select=sales_phone&limit=1`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } })).ok;
+  console.log(`   ℹ️  database has migration 006 (Yoruba + MY NUMBER): ${hasMig006 ? 'YES' : 'NO — testing the graceful path'}`);
+  const capStart = sent.length;
+  await webhook({ type: 'image', image: { id: 'IMG1', mime_type: 'image/jpeg', caption: 'Cord lace, 17,500 for 5 yards' } }); await sleep(200);
+  await webhook({ type: 'image', image: { id: 'IMG2', mime_type: 'image/jpeg' } }); await sleep(200);
+  await webhook({ type: 'image', image: { id: 'IMG3', mime_type: 'image/jpeg' } });
+  const tc = Date.now();
+  while (Date.now() - tc < 60_000 && sent.length === capStart) await sleep(300);
+  await sleep(2000);
+  const capReplies = sent.slice(capStart).map(view);
+  ok('3 photos + caption "Cord lace, 17,500 for 5 yards" → straight to "Making your video" (NOT asking for the name and price again)', capReplies.length === 1 && /Making your video for \*Cord lace\* at ₦17,500/.test(capReplies[0]!.text) && !/Got \d photos/.test(capReplies[0]!.text), capReplies.map((v) => v.text.replace(/\n/g, ' | ').slice(0, 130)).join(' // '));
+
+  // The hidden "unsupported" wrapper WhatsApp sends with an album must NOT produce "I can read text, voice notes and photos".
+  const wrapStart = sent.length;
+  await webhook({ type: 'unsupported', errors: [{ code: 131051, title: 'Message type is not supported' }] }); await sleep(300);
+  for (let i = 1; i <= 3; i++) { await webhook({ type: 'image', image: { id: `IMG${i}`, mime_type: 'image/jpeg' } }); await sleep(250); }
+  await sleep(20_000);
+  const wrapReplies = sent.slice(wrapStart).map(view).filter((v) => v.kind !== 'video'); // (the earlier captioned video may finish rendering meanwhile)
+  ok('an album (hidden "unsupported" event + 3 photos) → ONE "Got 3 photos" reply and NO "I can read text…" noise', wrapReplies.length === 1 && /Got 3 photos/.test(wrapReplies[0]!.text) && !/I can read text/.test(wrapReplies[0]!.text), wrapReplies.map((v) => v.text.replace(/\n/g, ' | ').slice(0, 90)).join(' // '));
+  ok('…and the prompt offers a Yoruba / Pidgin voice', /Yoruba/.test(wrapReplies[0]?.text ?? '') && /Pidgin/.test(wrapReplies[0]?.text ?? ''));
+  await rest(`whatsapp_sessions?phone_number=eq.${PH}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ current_state: 'IDLE', pending_payload: {} }) }); // leave the pending-photos state
+
+  // A genuinely unsupported message on its own: answered once, not on every attempt.
+  execFileSync('redis-cli', ['del', `img_seen:${PH}`]); // photos were sent a moment ago: the bot rightly stays quiet for 90 s after photos
+  const loneStart = sent.length;
+  await webhook({ type: 'unsupported', errors: [{ code: 131051 }] }); await sleep(8000);
+  await webhook({ type: 'unsupported', errors: [{ code: 131051 }] }); await sleep(10_000);
+  const lone = sent.slice(loneStart).map(view).filter((v) => v.kind !== 'video');
+  ok('a lone unsupported message (poll / view-once) → ONE helpful note, and the second attempt is not nagged', lone.length === 1 && /couldn.t open that/i.test(lone[0]!.text), `${lone.length} reply(ies): ${lone[0]?.text.replace(/\n/g, ' | ').slice(0, 100)}`);
+
+  // ───── YORUBA VIDEO: remake the last video with a Yoruba voice ─────
+  console.log('   … waiting for the captioned video, then making it in Yoruba');
+  const tCap = Date.now();
+  while (Date.now() - tCap < 240_000 && !sent.slice(capStart).map(view).some((v) => v.kind === 'video')) await sleep(2000);
+  ok('the captioned video was delivered', sent.slice(capStart).map(view).some((v) => v.kind === 'video'));
+  const yoStart = sent.length;
+  r = await ask('yoruba-video', () => text('YORUBA VIDEO'), (v) => /Making your video|couldn.t|I don.t have photos/.test(v.text));
+  ok('YORUBA VIDEO → "Making your video for Cord lace" with the voice noted (or an honest note if migration 006 is not applied)', !!r.reply && /Making your video for \*Cord lace\*/.test(r.reply.text) && (hasMig006 ? /Voice: Yoruba/.test(r.reply.text) : /not switched on yet/.test(r.reply.text)), r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
+  const ty = Date.now(); let yoVideo: ReturnType<typeof view> | undefined;
+  while (Date.now() - ty < 240_000 && !(yoVideo = sent.slice(yoStart).map(view).find((v) => v.kind === 'video'))) await sleep(2000);
+  ok('the Yoruba video was delivered', !!yoVideo, yoVideo?.text.replace(/\n/g, ' | ').slice(0, 120));
+  if (yoVideo?.header?.link) {
+    const buf = Buffer.from(await (await fetch(yoVideo.header.link)).arrayBuffer());
+    const f = path.join(tmp, 'yo.mp4'); fs.writeFileSync(f, buf);
+    const wav = path.join(tmp, 'yo.wav'); execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    let said = '';
+    for (let i = 0; i < 4 && !said; i++) { try { said = ((await ai.models.generateContent({ model: i % 2 ? 'gemini-3.5-flash-lite' : (process.env.GEMINI_TEXT_MODEL ?? 'gemini-3.1-flash-lite'), contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data: fs.readFileSync(wav).toString('base64') } }, { text: 'Transcribe every spoken word exactly, then on a new line: ENGLISH: <translation>.' }] }] })).text ?? '').trim(); } catch { await sleep(4000); } }
+    console.log(`   🎙️  the voice says: "${said.replace(/\n/g, ' ')}"`);
+    if (hasMig006) {
+      ok('the voice is YORUBA (Yoruba words/diacritics heard), says the price 17,500, and still asks to message on WhatsApp', /[ẹọṣẸỌṢ]|\b(ẹ|e) (wá|wa|fi)|péré|pere|lórí|lori/i.test(said) && /17,?500|seventeen/i.test(said) && /whatsapp/i.test(said), said.slice(0, 200));
+      ok('the Yoruba script has no phone number, code or invented claims', !/UNB-|code|\b0\d{3}\b/i.test(said));
+    } else { ok('without migration 006 the video is made in English instead of failing', /whatsapp/i.test(said), said.slice(0, 120)); }
+    fs.copyFileSync(f, path.resolve('tmp', 'flow-video-yoruba.mp4'));
+  }
+
   // ───── the "Processing your entry..." note (INTERIM_NOTICE_MS=1000 in this test) ─────
   const notices = sent.map(view).filter((v) => /Processing your entry\.\.\./.test(v.text));
   ok('slow AI → "⏳ Processing your entry..." was sent (and only as a lone short note)', notices.length >= 1 && notices.every((v) => v.kind === 'text' && v.buttons.length === 0), `${notices.length} notice(s)`);
