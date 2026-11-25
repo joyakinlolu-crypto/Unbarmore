@@ -97,8 +97,8 @@ export type BrainResult = z.infer<typeof BrainSchema>;
 const videoScriptSchema = (mini: boolean) => z.object({
   hook: z.string().describe(mini ? 'First 2 seconds, max 6 words, pattern-interrupt.' : 'First 2 seconds, max 8 words, pattern-interrupt.'),
   voiceover: z.string().describe(mini
-    ? `Short 8–10 second spoken script, ${MINI_VIDEO.words} words, Nigerian direct-response tone: hook, price, call to action naming the order code.`
-    : 'Full 15–18 second spoken script, 28–32 words (the voice speaks about two words a second), Nigerian direct-response tone, ends with clear call to action naming the order code.'),
+    ? `Short 8–10 second spoken script, ${MINI_VIDEO.words} words, Nigerian direct-response tone: hook, price, closing call to action "Message us on WhatsApp to order" (no phone number, no code).`
+    : 'Full 15–18 second spoken script, 28–32 words (the voice speaks about two words a second), Nigerian direct-response tone, ends with the call to action "Message us on WhatsApp to order" (no phone number, no code, no invented claims).'),
   captions: z.array(z.string()).describe('Exactly 3 burned-in caption lines, max 28 characters each, ALL CAPS punchy.'),
   pidgin: z.boolean().describe('True if voiceover is in Pidgin.'),
 });
@@ -262,7 +262,8 @@ export async function writeVideoScript(p: {
   productName: string;
   priceNgn: number | null;
   deliveryInfo: string | null;
-  orderCode: string;
+  /** @deprecated not used any more: customers order by messaging the shop's WhatsApp number. */
+  orderCode?: string;
   clearance?: boolean;
   pidgin?: boolean;
   /** ~10-second preview (trial / free plan). */
@@ -274,16 +275,15 @@ export async function writeVideoScript(p: {
     temperature: 0.8,
     system:
       (mini
-        ? `You write 8–10 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is ${MINI_VIDEO.words} words, no more: a 2-second hook, the product and price, then CTA "Send [ORDER CODE] on WhatsApp to order". `
-        : 'You write 15–18 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is 28–32 words, no more (the voice speaks about two words a second). Hook in the first 2 seconds, one concrete benefit, social proof feel, price, scarcity, then CTA: "Send [ORDER CODE] on WhatsApp to order". ') +
-      'Natural Lagos tone. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
+        ? `You write 8–10 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is ${MINI_VIDEO.words} words, no more: a 2-second hook, the product and price, then a closing call to action: "Message us on WhatsApp to order" (the phone number is shown on screen; never say any phone number, code or digits aloud). `
+        : 'You write 15–18 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is 28–32 words, no more (the voice speaks about two words a second). Hook in the first 2 seconds, one concrete benefit, price, a nudge to act now, then a closing call to action: "Message us on WhatsApp to order" (the phone number is shown on screen; never say any phone number, code or digits aloud). ') +
+      'Never invent facts the owner did not give you: no customer counts ("500 happy customers"), no ratings, no "limited stock" or "few pieces left", no discounts, no delivery promises beyond the given delivery text. Natural Lagos tone. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
     parts: [{
       text: JSON.stringify({
         business: p.businessName,
         product: p.productName,
         price_ngn: p.priceNgn,
         delivery: p.deliveryInfo,
-        order_code: p.orderCode,
         style: p.clearance ? '48-HOUR CLEARANCE FLASH SALE — strong urgency, ends in 48 hours' : 'standard product ad',
         language: p.pidgin ? 'Nigerian Pidgin' : 'Nigerian English',
       }),

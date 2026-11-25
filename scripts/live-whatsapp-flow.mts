@@ -399,15 +399,14 @@ try {
   ok('…the pending video now holds all 5 photos in the database session', ((await rows(`whatsapp_sessions?phone_number=eq.${PH}&select=pending_payload`))[0]?.pending_payload?.image_paths ?? []).length === 5);
 
   const beforeVid = sent.length;
-  r = await ask('video-details', () => text('Ankara gown, 15k, delivery Lagos 2k'), (v) => /UNB-[A-Z0-9]{3}/.test(v.text) && /video/i.test(v.text));
-  const code = r.reply?.text.match(/UNB-[A-Z0-9]{3}/)?.[0] ?? '';
-  ok('product details → instant "making your video" + Smart Order Code', !!r.reply && !!code, code);
+  r = await ask('video-details', () => text('Ankara gown, 15k, delivery Lagos 2k'), (v) => /Making your video/i.test(v.text));
+  ok('product details → instant "making your video"; customers are told they will see the WhatsApp number, NOT a code', !!r.reply && /WhatsApp number/i.test(r.reply.text) && !/UNB-|order code/i.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 160));
 
   console.log('   … rendering the video (Gemini script → voiceover → FFmpeg → upload). This takes 1–3 minutes.');
   const tv = Date.now();
   let videoMsg: ReturnType<typeof view> | undefined;
   while (Date.now() - tv < 240_000 && !(videoMsg = sent.slice(beforeVid).map(view).find((v) => v.kind === 'video'))) await sleep(2000);
-  ok(`video delivered as ONE video message with the order code (${Math.round((Date.now() - tv) / 1000)}s)`, !!videoMsg && videoMsg.text.includes(code), videoMsg?.text.replace(/\n/g, ' | '));
+  ok(`video delivered as ONE video message — no technical code; says "sold 1 Ankara gown" for logging (${Math.round((Date.now() - tv) / 1000)}s)`, !!videoMsg && !/UNB-|order code/i.test(videoMsg.text) && /sold 1 Ankara gown/i.test(videoMsg.text) && /Your number \*0\d{3} \d{3} \d{4}\*/.test(videoMsg.text), videoMsg?.text.replace(/\n/g, ' | '));
   if (videoMsg?.header?.link) {
     const buf = Buffer.from(await (await fetch(videoMsg.header.link)).arrayBuffer());
     const f = path.join(tmp, 'out.mp4'); fs.writeFileSync(f, buf);

@@ -26,7 +26,10 @@ export interface RenderInput {
   bgm: string | null;          // local instrumental path
   captions: string[];          // 3 lines
   priceText: string | null;    // "₦15,000"
-  orderCode: string;           // "UNB-7K2"
+  /** @deprecated customers no longer see a code; kept so older callers compile. */
+  orderCode?: string;
+  /** The shop's WhatsApp number as customers dial it, e.g. "0810 713 6951". Shown on screen so people can order. */
+  contactPhone?: string | null;
   watermark: 'full' | 'subtle' | 'none';
   clearance: boolean;
   /** ~10-second preview (trial / free plan) instead of the 15–18 second HD ad. */
@@ -36,6 +39,13 @@ export interface RenderInput {
   fontPath: string;
   outPath: string;
   workDir: string;
+}
+
+/** 2348107136951 → "0810 713 6951" (how Nigerians dial it). Returns null for anything that doesn't look like a Nigerian mobile. */
+export function displayPhone(e164: string | null | undefined): string | null {
+  const d = String(e164 ?? '').replace(/\D/g, '');
+  const local = d.startsWith('234') && d.length === 13 ? `0${d.slice(3)}` : d.length === 11 && d.startsWith('0') ? d : null;
+  return local ? `${local.slice(0, 4)} ${local.slice(4, 7)} ${local.slice(7)}` : null;
 }
 
 const probeDuration = (file: string) =>
@@ -125,17 +135,17 @@ async function renderOnce(input: RenderInput, maxrateK = 1300): Promise<{ bytes:
     const tf = await textFile(input.workDir, 'flash', '48-HOUR FLASH SALE');
     draw.push(`drawtext=fontfile='${font}':textfile='${tf}':fontsize=58:fontcolor=white:box=1:boxcolor=0xD92D20:boxborderw=20:x=(w-text_w)/2:y=h*0.06:enable='lt(t,${slidesDur.toFixed(2)})'`);
   }
-  const ctaFile = await textFile(input.workDir, 'cta', `Send ${input.orderCode} on WhatsApp to order`);
+  const ctaFile = await textFile(input.workDir, 'cta', input.contactPhone ? `WhatsApp ${input.contactPhone} to order` : 'Message us on WhatsApp to order');
   draw.push(
     `drawtext=fontfile='${font}':textfile='${ctaFile}':fontsize=40:fontcolor=white:box=1:boxcolor=0x0E7A4F@0.92:boxborderw=24:` +
     `x=(w-text_w)/2:y=h*0.84:enable='lt(t,${slidesDur.toFixed(2)})'`,
   );
   if (input.watermark === 'full') {
-    const a = await textFile(input.workDir, 'wm1', `Order code: ${input.orderCode}`);
+    const a = await textFile(input.workDir, 'wm1', input.contactPhone ?? 'Order on WhatsApp');
     const b = await textFile(input.workDir, 'wm2', 'Made with Unbarmore');
     const c = await textFile(input.workDir, 'wm3', 'unbarmore.com');
     const at = `enable='gte(t,${slidesDur.toFixed(2)})'`;
-    draw.push(`drawtext=fontfile='${font}':textfile='${a}':fontsize=80:fontcolor=0xFFD23F:x=(w-text_w)/2:y=h*0.40:${at}`);
+    draw.push(`drawtext=fontfile='${font}':textfile='${a}':fontsize=${input.contactPhone ? 84 : 70}:fontcolor=0xFFD23F:x=(w-text_w)/2:y=h*0.40:${at}`);
     draw.push(`drawtext=fontfile='${font}':textfile='${b}':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=h*0.52:${at}`);
     draw.push(`drawtext=fontfile='${font}':textfile='${c}':fontsize=44:fontcolor=white@0.7:x=(w-text_w)/2:y=h*0.58:${at}`);
   } else if (input.watermark === 'subtle') {
@@ -239,9 +249,10 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
 
     // Step 2 — script + Nigerian voiceover
     const price = Number(product.selling_price_ngn) || null;
+    const shopPhone = displayPhone(business.owner_phone);
     const script: VideoScript = await writeVideoScript({
       businessName: business.name, productName: product.name, priceNgn: price, deliveryInfo: row.delivery_info as string | null,
-      orderCode: product.sku_code, clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin', mini,
+      clearance: row.is_clearance as boolean, pidgin: row.voice_language === 'pidgin', mini,
     });
     let voicePath: string | null = null;
     try {
@@ -260,7 +271,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     const outPath = path.join(workDir, 'out.mp4');
     const { bytes } = await renderVideo({
       images: localImages, voiceover: voicePath, bgm: await pickBgm(), captions: script.captions.slice(0, 3),
-      priceText: price ? ngn(price) : null, orderCode: product.sku_code, watermark: row.include_watermark ? plan.watermark === 'none' ? 'subtle' : plan.watermark : 'none',
+      priceText: price ? ngn(price) : null, contactPhone: shopPhone, watermark: row.include_watermark ? plan.watermark === 'none' ? 'subtle' : plan.watermark : 'none',
       clearance: row.is_clearance as boolean, mini, fontPath: path.resolve(env.FONT_PATH), outPath, workDir,
     });
 
@@ -271,10 +282,10 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     await reply(phone)
       .video(await signedUrl('videos', videoPath, 6 * 3600))
       .text(
-        `🎬 *${product.name}*${price ? ` — ${ngn(price)}` : ''} · Order code *${product.sku_code}*`,
+        `🎬 *${product.name}*${price ? ` — ${ngn(price)}` : ''}`,
         '',
-        '👉 Post to your Status & forward to customers.',
-        `When a customer sends *${product.sku_code}*, reply _"sold 1 ${product.sku_code}"_ and I'll log it.`,
+        `👉 Post it to your WhatsApp Status and forward it to customers.${shopPhone ? ` Your number *${shopPhone}* is on the video, so they know where to order.` : ''}`,
+        `When someone buys, just tell me: _"sold 1 ${product.name}"_ and I'll log it.`,
         `_(${(bytes / 1024 / 1024).toFixed(1)}MB — light on data)_`,
         ...(mini ? ['', '🎞️ This is a ~10-second preview. Starter makes full 15–18 second HD ads.'] : []),
       )

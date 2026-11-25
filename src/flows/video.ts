@@ -33,7 +33,7 @@ export async function startVideo(
 
   return reply(actor.phone).text(
     `🎬 Making your ${p.clearance ? '48-hour flash-sale ' : ''}video for *${p.productName}*${p.priceNgn ? ` at ${ngn(p.priceNgn)}` : ''}.`,
-    `Order code: *${product.sku_code}* — customers send this to order.`,
+    'Customers will see your WhatsApp number on it so they can order.',
     'It arrives here in about 2 minutes. Keep selling! 💪',
   );
 }
