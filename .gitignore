@@ -5,3 +5,4 @@ dist
 tmp/
 *.zip
 unbarmore.env
+dump.rdb
