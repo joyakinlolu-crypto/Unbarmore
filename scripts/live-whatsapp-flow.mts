@@ -387,6 +387,17 @@ try {
   const imgReplies = sent.slice(beforeImg).map(view);
   ok('3 photos sent at once → exactly ONE reply (not three)', imgReplies.length === 1 && /3 photos/i.test(imgReplies[0]!.text) && /price/i.test(imgReplies[0]!.text), `${imgReplies.length} reply(ies): ${imgReplies[0]?.text.replace(/\n/g, ' | ').slice(0, 120)}`);
 
+  // A slow album: two more photos arrive AFTER the first prompt. They must be ADDED (not replace the first 3) and answered once.
+  media.set('IMG4', media.get('IMG1')!); media.set('IMG5', media.get('IMG2')!);
+  const beforeLate = sent.length;
+  for (let i = 4; i <= 5; i++) { await webhook({ type: 'image', image: { id: `IMG${i}`, mime_type: 'image/jpeg' } }); await sleep(250); }
+  const tl = Date.now();
+  while (Date.now() - tl < 60_000 && sent.length === beforeLate) await sleep(300);
+  await sleep(9000);
+  const lateReplies = sent.slice(beforeLate).map(view);
+  ok('2 late photos (slow album) → ONE short "Added — you now have 5 photos" reply, first 3 photos kept', lateReplies.length === 1 && /Added/.test(lateReplies[0]!.text) && /5 photos/.test(lateReplies[0]!.text), `${lateReplies.length} reply(ies): ${lateReplies[0]?.text.replace(/\n/g, ' | ').slice(0, 140)}`);
+  ok('…the pending video now holds all 5 photos in the database session', ((await rows(`whatsapp_sessions?phone_number=eq.${PH}&select=pending_payload`))[0]?.pending_payload?.image_paths ?? []).length === 5);
+
   const beforeVid = sent.length;
   r = await ask('video-details', () => text('Ankara gown, 15k, delivery Lagos 2k'), (v) => /UNB-[A-Z0-9]{3}/.test(v.text) && /video/i.test(v.text));
   const code = r.reply?.text.match(/UNB-[A-Z0-9]{3}/)?.[0] ?? '';

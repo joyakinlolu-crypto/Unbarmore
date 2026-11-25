@@ -41,6 +41,8 @@ export interface InboundJob { msg: WaInboundMessage; profileName: string | null 
 
 const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const IMG_KEY = (phone: string) => `img_buffer:${phone}`;
+const IMG_WINDOW_MS = 8000;
+const MAX_VIDEO_PHOTOS = 5;
 const LOCK_KEY = (phone: string) => `lock:msg:${phone}`;
 
 // ═════════════════════════ SAFE SEND ═════════════════════════
@@ -128,9 +130,10 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
       .pexpire(IMG_KEY(phone), 120_000)
       .exec();
     await imageBatchQueue.add('flush', { phone }, {
-      delay: 4000,
-      // Sliding 4s window: every new photo replaces the pending flush and restarts the timer.
-      deduplication: { id: `img:${phone}`, ttl: 4000, extend: true, replace: true },
+      delay: IMG_WINDOW_MS,
+      // Sliding window: every new photo replaces the pending flush and restarts the timer. 8s, not 4s: photos forwarded
+      // from a gallery over a slow phone connection can arrive more than 4s apart and used to split into two batches.
+      deduplication: { id: `img:${phone}`, ttl: IMG_WINDOW_MS, extend: true, replace: true },
     });
     return null;
   }
@@ -171,6 +174,12 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   }
   if (text) return runBrain(actor, { text }, session);
 
+  // A reaction (👍 on a message) is not a request: replying would spam the owner and cost a WhatsApp conversation.
+  if (msg.type === 'reaction') return null;
+  console.warn('[inbound] unsupported message type from', phone.slice(-4), '→', msg.type);
+  if (msg.type === 'video' || msg.type === 'document' || msg.type === 'sticker') {
+    return reply(phone).text('I can\'t open that kind of file yet. Send product *photos*, a voice note, or type it: _"sold 3 Ankara 45k cash"_');
+  }
   return reply(phone).text('I can read text, voice notes and photos. Try: _"sold 3 Ankara 45k cash"_');
 }
 
@@ -648,6 +657,17 @@ async function askOrStartVideo(
   }
   if (name && price) return startVideo(actor, { productName: name, priceNgn: price, deliveryInfo: delivery ?? null, rawPaths: paths });
 
+  // Late photos of the SAME set (a slow album arriving in pieces): add them to the pending photos instead of replacing them.
+  const session = await getSession(actor.phone);
+  const earlier = session.current_state === 'AWAITING_VIDEO_DETAILS' ? ((session.pending_payload.image_paths as string[] | undefined) ?? []) : [];
+  if (earlier.length) {
+    const all = [...earlier, ...paths].slice(0, MAX_VIDEO_PHOTOS);
+    await setSession(actor.phone, 'AWAITING_VIDEO_DETAILS', { image_paths: all });
+    return reply(actor.phone).text(
+      `➕ Added — you now have ${all.length} photo${all.length > 1 ? 's' : ''}${earlier.length + paths.length > MAX_VIDEO_PHOTOS ? ` (${MAX_VIDEO_PHOTOS} is the most for one video)` : ''}.`,
+      'Reply with the product name, price (₦) and delivery info (optional) to start your video.',
+    );
+  }
   await setSession(actor.phone, 'AWAITING_VIDEO_DETAILS', { image_paths: paths });
   return reply(actor.phone).text(
     `📸 Got ${paths.length} photo${paths.length > 1 ? 's' : ''}! For your sales video, reply in one message:`,

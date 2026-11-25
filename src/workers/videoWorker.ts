@@ -31,6 +31,8 @@ export interface RenderInput {
   clearance: boolean;
   /** ~10-second preview (trial / free plan) instead of the 15–18 second HD ad. */
   mini?: boolean;
+  /** Retry mode for small containers: 1 thread, no oversampling. Slower, but fits in a few hundred MB. */
+  lowMem?: boolean;
   fontPath: string;
   outPath: string;
   workDir: string;
@@ -47,7 +49,18 @@ async function textFile(dir: string, name: string, text: string): Promise<string
   return p.replace(/\\/g, '/').replace(/:/g, '\\:');
 }
 
+/** Normal render; if the container kills ffmpeg for memory (SIGKILL), retry once in low-memory mode instead of failing the customer's video. */
 export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<{ bytes: number; duration: number }> {
+  try {
+    return await renderOnce(input, maxrateK);
+  } catch (err) {
+    if (input.lowMem || !/SIGKILL|killed|Cannot allocate|ENOMEM/i.test(String((err as Error)?.message ?? err))) throw err;
+    console.error('[video] ffmpeg ran out of memory; retrying in low-memory mode');
+    return renderOnce({ ...input, lowMem: true }, maxrateK);
+  }
+}
+
+async function renderOnce(input: RenderInput, maxrateK = 1300): Promise<{ bytes: number; duration: number }> {
   const voiceDur = input.voiceover ? await probeDuration(input.voiceover) : 0;
   const endCard = input.watermark === 'full' ? (input.mini ? 1.2 : 1.6) : 0;
   // Speech is never cut off: if the voice would overrun the video, it is sped up (at most 1.25x) to fit.
@@ -63,11 +76,13 @@ export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<
   const font = input.fontPath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
   const filters: string[] = [];
-  // 1) Ken Burns per image: cover-crop to 9:16 at 2x for smooth sub-pixel zoom, alternate zoom-in / zoom-out.
+  // Memory matters: Railway kills ffmpeg (SIGKILL) when the container runs out of RAM. 1.5x (not 2x) is still smooth for a 10% zoom; lowMem retry uses 1.15x.
+  const OW = input.lowMem ? Math.round((W * 1.15) / 2) * 2 : W * 1.5, OH = input.lowMem ? Math.round((H * 1.15) / 2) * 2 : H * 1.5;
+  // 1) Ken Burns per image: cover-crop to 9:16 at 1.5x for smooth sub-pixel zoom, alternate zoom-in / zoom-out.
   input.images.forEach((_, i) => {
     const zoom = i % 2 === 0 ? `min(1+0.10*on/${segFrames},1.10)` : `max(1.10-0.10*on/${segFrames},1.0)`;
     filters.push(
-      `[${i}:v]scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase,crop=${W * 2}:${H * 2},setsar=1,` +
+      `[${i}:v]scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},setsar=1,` +
       `zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segFrames}:s=${W}x${H}:fps=${FPS},` +
       `trim=duration=${seg.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[v${i}]`,
     );
@@ -148,7 +163,7 @@ export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<
 
   await new Promise<void>((resolve, reject) => {
     const cmd = ffmpeg();
-    for (const img of input.images) cmd.input(img).inputOptions(['-loop 1', `-t ${seg + 0.5}`, `-framerate ${FPS}`]);
+    for (const img of input.images) cmd.input(img).inputOptions(['-threads 1'])  // ONE still frame in: zoompan makes exactly segFrames frames from it (looping the photo as video made it do ~100x the work);
     if (input.voiceover) cmd.input(input.voiceover);
     if (input.bgm) cmd.input(input.bgm);
     cmd
@@ -161,7 +176,9 @@ export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<
         ...(aMap ? ['-c:a aac', '-b:a 96k', '-ar 44100'] : ['-an']),
         `-t ${total.toFixed(2)}`,
         '-movflags +faststart',
-        '-threads 0',
+        // Cap parallelism: '-threads 0' spawned ~60 x264 threads on the host's cores and blew past the container's RAM.
+        `-threads ${input.lowMem ? 1 : 2}`, '-filter_threads 1', '-filter_complex_threads 1',
+        '-x264-params', `threads=${input.lowMem ? 1 : 2}:lookahead_threads=1:rc-lookahead=10`,
       ])
       .on('error', (err, _o, stderr) => reject(new Error(`${err.message}\n${String(stderr).slice(-1500)}`)))
       .on('end', () => resolve())
@@ -172,7 +189,7 @@ export async function renderVideo(input: RenderInput, maxrateK = 1300): Promise<
   // Mobile-data budget: if over 3.5MB, re-encode once at a computed lower bitrate.
   if (size > MAX_BYTES && maxrateK > 500) {
     const target = Math.floor(((MAX_BYTES * 8) / total / 1000 - 110) * 0.92);
-    return renderVideo(input, Math.max(500, target));
+    return renderOnce(input, Math.max(500, target));
   }
   return { bytes: size, duration: total };
 }
@@ -276,10 +293,12 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
 }
 
 export function startVideoWorker() {
-  // Rendering is CPU-bound: 1–2 per vCPU. Scale horizontally by running more PROCESS_ROLE=workers containers.
+  // One render at a time by default. os.cpus() reports the HOST's cores inside Railway/Docker (dozens), not this container's
+  // 1 GB: sizing by it ran many ffmpegs at once and the kernel killed them (SIGKILL → "video failed to render").
+  // Raise VIDEO_CONCURRENCY only after giving the service more RAM (~600 MB per render). Scale out with more PROCESS_ROLE=workers containers.
   return new Worker<VideoJob>(QUEUE.video, processVideo, {
     connection: redisConnection,
-    concurrency: Math.max(1, Math.floor(os.cpus().length / 2)),
+    concurrency: Math.max(1, Number(process.env.VIDEO_CONCURRENCY) || 1),
     lockDuration: 5 * 60_000,
   });
 }

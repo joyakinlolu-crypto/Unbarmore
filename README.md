@@ -148,3 +148,8 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 
 ## Getting owners into the app (WhatsApp + app together)
 - Morning notes on **Tue/Fri** and evening notes on **Wed/Sat** invite owners to the app until they have it (accounts under 45 days old only): first *"Also in your app: charts, who owes you, your profit. Tap Open my app"* (a **📲 Open my app** button sends a fresh one-tap login link), then, once they've opened it, *"Add to Home Screen and turn on my evening alert"*. Detected from real activity: a redeemed login link = opened; a push subscription = installed with alerts. Nothing is sent to someone who already has alerts on.
+
+## Video rendering on small containers (Railway 1 GB)
+- Renders run **one at a time** (`VIDEO_CONCURRENCY`, default 1). Do not size it from `os.cpus()`: inside Railway/Docker that reports the host's cores, not the container's, and parallel ffmpegs get OOM-killed (SIGKILL → "video failed to render"). Raise it only after giving the service more RAM (~600 MB per render).
+- ffmpeg is capped to 2 threads; if it is still killed, `renderVideo` retries once in a low-memory mode.
+- Photos arriving up to 8 s apart count as one batch; later ones are added to the pending video (max 5) instead of replacing it.
