@@ -43,7 +43,7 @@ export function incompleteNote(v: ProfitView): string | null {
 export function dayLine(s: ProfitInput): string {
   const v = profitView(s);
   return v.basis === 'true'
-    ? `📊 Today: Sales ${ngn(v.revenue)} · Costs ${ngn(v.cogs + v.running)} · Profit *${profitPhrase(v)}*`
+    ? `📊 Today: Sales ${ngn(v.revenue)} · Spent ${ngn(v.running + v.stockBought)} · Profit *${profitPhrase(v)}*`
     : `📊 Today: Sales ${ngn(v.revenue)} · Spent ${ngn(v.running + v.stockBought)} · Cash left *${ngn(v.profit)}*`;
 }
 
@@ -54,10 +54,12 @@ export function profitBlock(title: string, s: ProfitInput & { cash_in_ngn?: numb
     ? [
         `*${title}*`,
         `Sales: ${ngn(v.revenue)}`,
+        `Money spent: ${ngn(v.running + v.stockBought)}`,
+        `   • Running costs (transport, food, fuel, rent…): ${ngn(v.running)}`,
+        `   • Stock you bought: ${ngn(v.stockBought)}`,
         `Cost of what you sold: ${ngn(v.cogs)}`,
-        `Running costs (rent, fuel, staff…): ${ngn(v.running)}`,
         `*Profit: ${profitPhrase(v)}*`,
-        `_Stock bought: ${ngn(v.stockBought)}. That is stock on your shelf, not a cost._`,
+        '_Stock you bought is money out today, but it only becomes a cost when you sell it._',
       ]
     : [
         `*${title}*`,
@@ -67,7 +69,10 @@ export function profitBlock(title: string, s: ProfitInput & { cash_in_ngn?: numb
         `*Cash left: ${ngn(v.profit)}*`,
         '_This is cash left, not profit: cost prices aren\'t set up yet._',
       ];
-  if (s.cash_in_ngn !== undefined) lines.push(`Money received: ${ngn(s.cash_in_ngn)}${s.debt_collected_ngn ? ` (incl. ${ngn(s.debt_collected_ngn)} old debts)` : ''}`);
+  if (s.cash_in_ngn !== undefined) {
+    lines.push(`Money received: ${ngn(s.cash_in_ngn)}${s.debt_collected_ngn ? ` (incl. ${ngn(s.debt_collected_ngn)} old debts)` : ''}`);
+    lines.push(`*Cash left: ${ngn(Number(s.cash_in_ngn) - v.running - v.stockBought)}* _(money received − money spent)_`);
+  }
   const note = incompleteNote(v);
   if (note) lines.push('', note);
   return lines;

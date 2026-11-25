@@ -34,7 +34,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const t = ((today.data as Record<string, string>[] | null)?.[0]) ?? {};
   const tv = profitFromRow(t);
   const todayIn = Number(t.cash_in_ngn ?? 0);
-  const todayCosts = tv.basis === 'true' ? tv.cogs + tv.running : tv.running + tv.stockBought;
+  // Money out = everything paid out today: running costs AND stock bought. (Cost of goods *sold* is a profit concept, shown below.)
+  const todayOut = tv.running + tv.stockBought;
   const todayCount = Number(t.tx_count ?? 0);
   const collectedEver = Number(((allTime.data as Record<string, string>[] | null)?.[0] ?? {}).debt_collected_ngn ?? 0);
   const protectedMargin = Number(b.total_value_recovered_ngn);
@@ -86,11 +87,16 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       <section className="rounded-3xl border border-slate-100 p-4 shadow-sm" aria-label="Today">
         <h2 className="mb-3 font-semibold">Today</h2>
         {todayCount > 0 ? (
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div><p className="text-xs text-slate-500">Money in</p><p className="font-bold text-profit">{ngn(todayIn)}</p></div>
-            <div><p className="text-xs text-slate-500">{tv.basis === 'true' ? 'Costs' : 'Spent'}</p><p className="font-bold text-alert">{ngn(todayCosts)}</p></div>
-            <div><p className="text-xs text-slate-500">{profitLabel(tv)}</p><p className={`font-bold ${tv.profit >= 0 ? 'text-profit' : 'text-alert'}`}>{profitPhrase(tv)}</p></div>
-          </div>
+          <>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div><p className="text-xs text-slate-500">Money in</p><p className="font-bold text-profit">{ngn(todayIn)}</p></div>
+              <div><p className="text-xs text-slate-500">Money out</p><p className="font-bold text-alert">{ngn(todayOut)}</p></div>
+              <div><p className="text-xs text-slate-500">Cash left</p><p className={`font-bold ${todayIn - todayOut >= 0 ? 'text-profit' : 'text-alert'}`}>{ngn(todayIn - todayOut)}</p></div>
+            </div>
+            <p className="mt-2 text-center text-xs text-slate-500">
+              {tv.stockBought > 0 ? `Includes ${ngn(tv.stockBought)} stock bought. ` : ''}{tv.basis === 'true' ? 'Profit' : 'Sales minus spending'}: <b className={tv.profit >= 0 ? 'text-profit' : 'text-alert'}>{profitPhrase(tv)}</b>{tv.basis === 'true' && tv.stockBought > 0 ? ' (stock counts as a cost once sold)' : ''}
+            </p>
+          </>
         ) : (
           <p className="text-sm text-slate-500">Nothing logged yet today. Sold something? A quick voice note is enough.</p>
         )}
@@ -121,7 +127,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           </>
         )}
         <Kpi label="Customers owe you" value={ngn(owed)} sub={owed > 0 ? `${debt.data?.length} customer${debt.data?.length === 1 ? '' : 's'}` : 'All paid 🎉'} href="/ledger?tab=debtors" />
-        {pv.basis === 'true' && <Kpi label="Stock bought" value={ngn(pv.stockBought)} sub="on your shelf, not a cost" />}
+        {pv.basis === 'true' && <Kpi label="Stock bought" value={ngn(pv.stockBought)} sub="money out now · a cost once sold" />}
+        <Kpi label="Money out this month" value={ngn(pv.running + pv.stockBought)} sub="running costs + stock bought" tone="alert" />
+        {pv.basis === 'true' && <Kpi label="Cash left this month" value={ngn(Number(s.cash_in_ngn ?? 0) - pv.running - pv.stockBought)} sub="money in − money out" tone={Number(s.cash_in_ngn ?? 0) - pv.running - pv.stockBought >= 0 ? 'profit' : 'alert'} />}
       </section>
       {pv.incomplete && (
         <p className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-900" role="note">

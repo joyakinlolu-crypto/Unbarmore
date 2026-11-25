@@ -115,6 +115,14 @@ export async function proposeProducts(actor: Actor, kv: KV, raw: Parameters<type
         const parts = [change('stock', o ? Math.max(0, Number(o.stock_qty)) : undefined, i.quantity, false), change('cost', o ? Number(o.cost_price_ngn) : undefined, i.cost, true), change('price', o ? Number(o.selling_price_ngn) : undefined, i.price, true)].filter(Boolean);
         return `${n + 1}. *${i.name}*${o ? '' : ' _(new)_'} — ${parts.join(' · ')}`;
       }),
+      ...items.flatMap((i) => {
+        // The classic mistake: a TOTAL paid for goods typed as the cost of ONE piece (₦15,550 for 5 pieces → "cost ₦15,550").
+        const o = old.get(nameKey(i.name));
+        const sells = i.price ?? (o ? Number(o.selling_price_ngn) : 0);
+        return i.cost !== undefined && sells > 0 && i.cost > sells
+          ? ['', `⚠️ *${i.name}*: a cost of ${ngn(i.cost)} per piece is MORE than you sell it for (${ngn(sells)}). If ${ngn(i.cost)} is the *total* you paid for all of them, tap Cancel and send: _bought 5 ${i.name.toLowerCase()} ${i.cost.toLocaleString('en-NG')}_ (use your real number of pieces).`]
+          : [];
+      }),
       '',
       '_This only sets the numbers. It is not counted as a sale or a purchase._',
     )

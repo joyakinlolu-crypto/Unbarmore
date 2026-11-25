@@ -91,8 +91,8 @@ try {
   ok('Customers owe you ₦95,000 (1 customer)', /Customers owe you ₦95,000 1 customer/.test(dTxt));
   ok('expense breakdown lists Fuel/Diesel ₦60,000 and Rent ₦20,000', dTxt.includes('Fuel/Diesel') && dTxt.includes('₦60,000') && dTxt.includes('Rent/Utilities') && dTxt.includes('₦20,000'));
   ok('plan badge shows Free trial', dTxt.includes('Free trial'));
-  ok('dashboard has a "Today" card: money in / spent / profit for today, top debtor, and a WhatsApp chase button',
-    (migrated ? /Today Money in ₦105,000 Costs ₦80,000 Profit up to ₦120,000/ : /Today Money in ₦105,000 Spent ₦80,000 Cash left ₦120,000/).test(dTxt) && /Still owing you Mama Tunde ₦95,000/.test(dTxt) && /Chase them on WhatsApp/.test(dTxt) && /Log a sale on WhatsApp/.test(dTxt),
+  ok('dashboard has a "Today" card: money in / money out (incl. stock bought) / cash left, then profit, for today, top debtor, and a WhatsApp chase button',
+    (migrated ? /Today Money in ₦105,000 Money out ₦80,000 Cash left ₦25,000 Profit: up to ₦120,000/ : /Today Money in ₦105,000 Money out ₦80,000 Cash left ₦25,000 Sales minus spending: ₦120,000/).test(dTxt) && /Still owing you Mama Tunde ₦95,000/.test(dTxt) && /Chase them on WhatsApp/.test(dTxt) && /Log a sale on WhatsApp/.test(dTxt),
     (dTxt.match(/Today .{0,140}/) ?? [''])[0]);
   ok('dashboard headline: nothing collected yet → invites the first chase (no fake number)', /Chase your first debt/.test(dTxt) && !/Money Unbarmore got back for you ₦/.test(dTxt));
   await db.from('transactions').insert(row({ tx_type: 'debt_repayment', description: 'Debt repayment — Mama Tunde', category: 'Debt Repayment', total_amount_ngn: 30000, amount_paid_ngn: 30000, payment_method: 'transfer', customer_id: cust!.id }));

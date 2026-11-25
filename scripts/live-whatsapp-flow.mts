@@ -648,7 +648,32 @@ try {
   const gele2 = (await rows(`products?business_id=eq.${biz!.id}&select=cost_price_ngn&name_key=eq.gele`))[0];
   ok('database: Gele now has cost price ₦3,000', Number(gele2?.cost_price_ngn) === 3000, JSON.stringify(gele2));
   r = await ask('profit-q', () => text('what is my profit this month'), (v) => /Profit|Cash left/.test(v.text), 40_000);
-  ok('"what is my profit" → a labelled breakdown: Sales, then Profit (or honestly "Cash left" until cost prices are set up), and stock bought is explained as not a cost', !!r.reply && /Sales:/.test(r.reply.text) && /(Profit|Cash left):/.test(r.reply.text) && /Stock bought/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 300));
+  ok('"what is my profit" → a labelled breakdown: Sales, then Profit (or honestly "Cash left" until cost prices are set up), and stock bought is explained', !!r.reply && /Sales:/.test(r.reply.text) && /(Profit|Cash left):/.test(r.reply.text) && /Stock (you )?bought/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 300));
+
+  // ───── "the goods cost me 15,550": a TOTAL spent on goods is stock bought (money OUT), never a per-item cost price or income ─────
+  const beforeGoods = sent.length;
+  r = await ask('goods-total', () => text('the goods cost me 15,550'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const goodsTx = (await rows(`transactions?business_id=eq.${biz!.id}&select=tx_type,total_amount_ngn,status&order=created_at.desc&limit=3`)).find((t: any) => Number(t.total_amount_ngn) === 15550);
+  ok('"the goods cost me 15,550" → recorded as STOCK BOUGHT (restock, money out) — not a sale/income, and not "update product price"', goodsTx?.tx_type === 'restock' && !/Update your products/.test(r.reply?.text ?? ''), JSON.stringify(goodsTx) + ' :: ' + (r.reply?.text ?? '').replace(/\n/g, ' | ').slice(0, 140));
+  const goodsBtn = r.reply?.buttons.find((b) => b.id.startsWith('TXC:'));
+  if (goodsBtn) r = await ask('goods-confirm', () => button(goodsBtn.id), (v) => /Saved/.test(v.text));
+  ok('after saving, the day line counts the goods as money spent ("Spent ₦…" includes ₦15,550)', /Spent ₦(?:\d{1,3},)*\d{3}/.test(r.reply?.text ?? '') && Number((r.reply?.text.match(/Spent ₦([\d,]+)/)?.[1] ?? '0').replace(/,/g, '')) >= 15550, r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+
+  // ───── transport + feeding are EXPENSES (money out), never income ─────
+  const trBefore = sent.length;
+  r = await ask('transport-food', () => text('transportation 800 feeding 800'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const trRows = (await rows(`transactions?business_id=eq.${biz!.id}&select=tx_type,total_amount_ngn,category,status&order=created_at.desc&limit=3`)).filter((t: any) => Number(t.total_amount_ngn) === 800);
+  ok('"transportation 800 feeding 800" → TWO expenses of ₦800 (not income, not one ₦1,600)', trRows.length === 2 && trRows.every((t: any) => t.tx_type === 'expense'), JSON.stringify(trRows));
+
+  // ───── a "cost per item" higher than the selling price is challenged (the ₦15,550 mistake) ─────
+  r = await ask('cost-gt-price', () => text('lace costs me 30k each'), (v) => v.buttons.some((b) => b.id.startsWith('ACTOK:')));
+  ok('"lace costs me 30k each" (more than lace sells for) → a ⚠️ warning asking if it is the TOTAL, with what to send instead', /⚠️/.test(r.reply?.text ?? '') && /MORE than you sell it for/.test(r.reply?.text ?? '') && /bought 5 lace/i.test(r.reply?.text ?? ''), r.reply?.text.replace(/\n/g, ' | ').slice(0, 260));
+  const noTk = r.reply?.buttons.find((b) => b.id.startsWith('ACTNO:'))?.id;
+  if (noTk) await ask('cost-gt-price-cancel', () => button(noTk), (v) => /cancel|Okay|✖/i.test(v.text), 30_000).catch(() => null);
+
+  // ───── what she asks for: the profit breakdown shows money spent incl. stock, and cash left ─────
+  r = await ask('profit-q2', () => text('what is my profit this month'), (v) => /Money spent/.test(v.text), 60_000);
+  ok('"what is my profit" → Sales, Money spent (running costs + stock you bought), Cost of what you sold, Profit, and Cash left', !!r.reply && /Money spent:/.test(r.reply.text) && /Stock you bought:/.test(r.reply.text) && /Running costs/.test(r.reply.text) && /Cost of what you sold/.test(r.reply.text) && /Profit/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 420));
 
   // ───── morning/evening notes: pause, resume, and the buttons on them ─────
   r = await ask('reminders-off', () => text('REMINDERS OFF'), (v) => /stop the 7 AM and 9 PM/i.test(v.text));

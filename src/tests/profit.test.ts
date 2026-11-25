@@ -30,10 +30,20 @@ describe('profit = sales − cost of goods sold − running costs', () => {
   });
   it('the day line and the full block say the same thing', () => {
     const s = sum({ cogs_ngn: 150000, unpriced_revenue_ngn: 0, restock_ngn: 90000 });
-    expect(dayLine(s)).toBe('📊 Today: Sales ₦200,000 · Costs ₦160,000 · Profit *₦40,000*');
+    // Buying stock IS money out (₦90,000 + ₦10,000 running costs), shown immediately; profit only counts it once the goods are sold.
+    expect(dayLine(s)).toBe('📊 Today: Sales ₦200,000 · Spent ₦100,000 · Profit *₦40,000*');
     const block = profitBlock('Ada Shop: this week', s).join('\n');
     expect(block).toContain('Cost of what you sold: ₦150,000');
     expect(block).toContain('*Profit: ₦40,000*');
-    expect(block).toContain('Stock bought: ₦90,000. That is stock on your shelf, not a cost.');
+    expect(block).toContain('Money spent: ₦100,000');
+    expect(block).toContain('Stock you bought: ₦90,000');
+    expect(block).toContain('Running costs (transport, food, fuel, rent…): ₦10,000');
+    expect(block).toContain('only becomes a cost when you sell it');
+  });
+
+  it('cash left = money received − money spent (running costs AND stock bought), so a purchase is visible at once', () => {
+    const block = profitBlock('Today', { ...sum({ cogs_ngn: 0, unpriced_revenue_ngn: 94000, restock_ngn: 15550, expenses_ngn: 1600 }), cash_in_ngn: 94000 }).join('\n');
+    expect(block).toContain('Money spent: ₦17,150');
+    expect(block).toContain('*Cash left: ₦76,850*');
   });
 });
