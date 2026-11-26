@@ -89,6 +89,13 @@ try {
   const sum = await S.ledgerSummary(biz.id, from, to);
   // True profit (migration 005): stock bought (₦40,000) is NOT a cost; lace cost price unknown → profit shown as 'up to', flagged by unpriced_revenue.
   ok('ledger_summary: revenue 50,000 · expenses 5,000 · restock excluded · profit up to 45,000 (cost unknown)', sum.revenue_ngn === 50000 && sum.expenses_ngn === 5000 && sum.restock_ngn === 40000 && sum.net_profit_ngn === 45000 && sum.unpriced_revenue_ngn === 50000, JSON.stringify(sum));
+  // Migration 007: the cost price arrives AFTER the sale (the normal order for a new shop) → the earlier sale is costed, profit and "up to" update.
+  const has007 = (await db.rpc('ledger_summary', { p_business_id: biz.id, p_from: from.toISOString(), p_to: to.toISOString() })).error === null;
+  await db.from('products').update({ cost_price_ngn: 15000 }).eq('business_id', biz.id).eq('name', 'Swiss Lace');
+  const costed = await S.ledgerSummary(biz.id, from, to);
+  const hasTrigger = Number(costed.cogs_ngn) === 30000;
+  console.log(`   ℹ️  migration 007 (cost back-fill) applied on this database: ${hasTrigger ? 'YES' : 'NO'}`);
+  ok('cost given AFTER the sale: 2 lace × ₦15,000 flows into cost of goods (₦30,000), profit ₦15,000, nothing "unpriced" any more', hasTrigger && Number(costed.net_profit_ngn) === 15000 && Number(costed.unpriced_revenue_ngn) === 0 && has007, JSON.stringify(costed));
   const series = await db.rpc('ledger_series', { p_business_id: biz.id, p_from: from.toISOString(), p_to: to.toISOString(), p_bucket: 'day' });
   ok('ledger_series (web chart) returns rows', !series.error && (series.data as unknown[]).length >= 1, series.error?.message ?? '');
   const top = await S.topProducts(biz.id, from, to);

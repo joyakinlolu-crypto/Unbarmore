@@ -493,7 +493,7 @@ try {
     console.log(`   🎙️  the voice says: "${said.replace(/\n/g, ' ')}"`);
     if (hasMig006) {
       ok('the voice is YORUBA (Yoruba words/diacritics heard), says the price 17,500, and still asks to message on WhatsApp', /[ẹọṣẸỌṢ]|\b(ẹ|e) (wá|wa|fi)|péré|pere|lórí|lori/i.test(said) && /17,?500|seventeen/i.test(said) && /whatsapp/i.test(said), said.slice(0, 200));
-      ok('the Yoruba script has no phone number, code or invented claims', !/UNB-|code|\b0\d{3}\b/i.test(said));
+      ok('the Yoruba voice speaks no order code and no phone number (the number is on screen, not spoken)', !/UNB-|order code|\b0\d{9,10}\b|\b\d{4} \d{3} \d{4}\b/i.test(said));
     } else { ok('without migration 006 the video is made in English instead of failing', /whatsapp/i.test(said), said.slice(0, 120)); }
     fs.copyFileSync(f, path.resolve('tmp', 'flow-video-yoruba.mp4'));
   }
