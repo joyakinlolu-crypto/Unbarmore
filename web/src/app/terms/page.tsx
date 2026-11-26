@@ -118,7 +118,7 @@ export default function Terms() {
 
       <section>
         <H n={14}>Contact</H>
-        <P>{LEGAL.company}{REG_ID ? ` (${REG_ID})` : ''}{LEGAL.address ? `, ${LEGAL.address}` : ''}. Email <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a>.</P>
+        <P>{LEGAL.company}{REG_ID ? ` (${REG_ID})` : ''}{LEGAL.address ? `, ${LEGAL.address}` : ''}. Email <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a>{LEGAL.phone ? `, phone ${LEGAL.phone}` : ''}.</P>
       </section>
     </LegalPage>
   );

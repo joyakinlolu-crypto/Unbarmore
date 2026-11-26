@@ -19,7 +19,7 @@ export function LegalPage({ title, intro, children }: { title: string; intro: st
       <p className="mt-4 rounded-2xl bg-mist p-4 text-sm">{intro}</p>
       <div className="mt-6 space-y-6">{children}</div>
       <footer className="mt-10 border-t border-slate-100 pt-4 text-xs text-slate-500">
-        {LEGAL.company}{REG_ID ? ` · ${REG_ID}` : ''}{LEGAL.address ? ` · ${LEGAL.address}` : ''} · <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a>
+        {LEGAL.company}{REG_ID ? ` · ${REG_ID}` : ''}{LEGAL.address ? ` · ${LEGAL.address}` : ''}{LEGAL.phone ? ` · Tel ${LEGAL.phone}` : ''} · <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a>
       </footer>
     </main>
   );

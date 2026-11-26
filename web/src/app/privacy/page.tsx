@@ -120,6 +120,7 @@ export default function Privacy() {
         <UL>
           <li><b>On WhatsApp:</b> message the bot {LEGAL.whatsapp ? `on ${LEGAL.whatsapp} ` : ''}with the words <b>DELETE MY DATA</b>. We reply to confirm and then delete.</li>
           <li><b>By email:</b> write to <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a> from any address, stating the WhatsApp number on the account. We confirm it is you through that number.</li>
+          {LEGAL.phone && <li><b>By phone:</b> call {LEGAL.company} on {LEGAL.phone}.</li>}
         </UL>
         <P>Deleting removes your business records, customers, files and videos, apart from records we must keep by law (section 7). If you only want to stop messages, send <b>STOP</b>.</P>
       </section>

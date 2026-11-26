@@ -11,6 +11,9 @@ export const LEGAL = {
   rc: process.env.NEXT_PUBLIC_LEGAL_RC || '',
   address: process.env.NEXT_PUBLIC_LEGAL_ADDRESS || '',
   email: process.env.NEXT_PUBLIC_PRIVACY_EMAIL || 'privacy@unbarmore.com',
+  /** The company's official phone number (NOT the bot's WhatsApp line). */
+  phone: process.env.NEXT_PUBLIC_CONTACT_PHONE || '',
+  /** The bot's own WhatsApp number: only set once the real number is live, so the pages never point people at a test line. */
   whatsapp: process.env.NEXT_PUBLIC_WHATSAPP_DISPLAY || '',
   effective: '26 November 2026',
 } as const;
