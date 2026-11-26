@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { H, LegalPage, P, UL } from '@/components/LegalPage';
-import { LEGAL, PROCESSORS } from '@/lib/legal';
+import { LEGAL, PROCESSORS, REG_ID } from '@/lib/legal';
 
 export const metadata: Metadata = {
   title: 'Privacy Policy',
@@ -16,7 +16,7 @@ export default function Privacy() {
       <section>
         <H n={1}>Who is responsible for your data</H>
         <P>
-          {LEGAL.company}{LEGAL.rc ? ` (RC ${LEGAL.rc})` : ''}{LEGAL.address ? `, ${LEGAL.address}` : ''} (“{LEGAL.product}”, “we”, “us”) is the data controller for the personal data of
+          {LEGAL.product} is a product owned and operated by {LEGAL.company}{REG_ID ? ` (${REG_ID})` : ''}{LEGAL.address ? `, ${LEGAL.address}` : ''} (“we”, “us”). We are the data controller for the personal data of
           the business owners and staff who use {LEGAL.product}. For the names and phone numbers of <i>your own customers</i> that you give us, you are the controller and we act as your processor:
           we only use that data to provide the service to you.
         </P>

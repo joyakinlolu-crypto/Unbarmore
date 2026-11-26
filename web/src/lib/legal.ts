@@ -15,6 +15,9 @@ export const LEGAL = {
   effective: '26 November 2026',
 } as const;
 
+/** "BN 7978345" / "RC 123456": a Business Name (BN) number is not an RC number, so only add "RC" when the value is a bare number. */
+export const REG_ID = LEGAL.rc ? (/^[A-Za-z]{2}\b/.test(LEGAL.rc) ? LEGAL.rc : `RC ${LEGAL.rc}`) : '';
+
 /** Third parties that process data for us (listed in the Privacy Policy). Keep in sync with what the product really uses. */
 export const PROCESSORS = [
   { name: 'Meta Platforms (WhatsApp Cloud API)', why: 'delivers your WhatsApp messages, voice notes and photos to us, and our replies to you', where: 'USA / global' },

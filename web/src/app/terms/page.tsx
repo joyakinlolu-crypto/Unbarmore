@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { H, LegalPage, P, UL } from '@/components/LegalPage';
-import { LEGAL } from '@/lib/legal';
+import { LEGAL, REG_ID } from '@/lib/legal';
 
 export const metadata: Metadata = {
   title: 'Terms of Service',
@@ -11,7 +11,7 @@ export default function Terms() {
   return (
     <LegalPage
       title="Terms of Service"
-      intro={`These terms are the agreement between you and ${LEGAL.company} for using ${LEGAL.product} on WhatsApp and on the web. By using ${LEGAL.product} you accept them. If you do not accept them, please do not use the service.`}
+      intro={`${LEGAL.product} is a product owned and operated by ${LEGAL.company}${REG_ID ? ` (${REG_ID})` : ''}. These terms are the agreement between you and ${LEGAL.company} for using ${LEGAL.product} on WhatsApp and on the web. By using ${LEGAL.product} you accept them. If you do not accept them, please do not use the service.`}
     >
       <section>
         <H n={1}>Who can use {LEGAL.product}</H>
@@ -118,7 +118,7 @@ export default function Terms() {
 
       <section>
         <H n={14}>Contact</H>
-        <P>{LEGAL.company}{LEGAL.rc ? ` (RC ${LEGAL.rc})` : ''}{LEGAL.address ? `, ${LEGAL.address}` : ''}. Email <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a>.</P>
+        <P>{LEGAL.company}{REG_ID ? ` (${REG_ID})` : ''}{LEGAL.address ? `, ${LEGAL.address}` : ''}. Email <a className="underline" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a>.</P>
       </section>
     </LegalPage>
   );
