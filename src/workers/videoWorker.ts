@@ -13,6 +13,7 @@ import { writeVideoScript, type VideoScript } from '../services/geminiBrain.js';
 import { enhanceProductPhoto, type StudioTheme } from '../services/imageStudio.js';
 import { synthesizeVoiceover } from '../services/ttsService.js';
 import { reply } from '../services/whatsapp.js';
+import { alertAdmin, noteGeminiError } from '../lib/alerts.js';
 
 const W = 1080;
 const H = 1920;
@@ -289,6 +290,10 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
   } catch (err) {
     const final = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
     await db.from('video_jobs').update({ status: final ? 'failed' : 'queued', error_message: String(err).slice(0, 2000) }).eq('id', videoId);
+    // Tell the platform owner at once (every failed attempt; "will retry" vs "gave up" is spelled out).
+    void alertAdmin('video', `Video ${final ? 'FAILED (gave up)' : 'failed (will retry)'}: ${product.name} · ${business.name} (…${phone.slice(-4)})`,
+      String(err).split('\n')[0] ?? '', { key: `${videoId}:${job.attemptsMade}`, cooldownS: 3600 });
+    void noteGeminiError('video', err);
     if (final) {
       await refundQuota(businessId, 'videos_used_this_month');
       await reply(phone).text(`😓 Your video for ${product.name} failed to render. It didn't count against your plan — send the photos again.`).send().catch(() => undefined);

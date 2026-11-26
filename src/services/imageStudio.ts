@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import { GoogleGenAI } from '@google/genai';
+import { noteGeminiError } from '../lib/alerts.js';
 
 // Image generation (responseModalities/imageConfig) is only on the v1beta API surface; the SDK default is v1.
 const genai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY, httpOptions: { apiVersion: 'v1beta' } });
@@ -44,6 +45,7 @@ export async function enhanceProductPhoto(
     return { data: Buffer.from(part.inlineData.data, 'base64'), mimeType: part.inlineData.mimeType ?? 'image/png', enhanced: true };
   } catch (err) {
     // Never block the video, but never fail silently either: a 402/429 here means every video ships with un-cleaned photos.
+    void noteGeminiError('photo cleanup', err); // a 402 here would otherwise be invisible: every video would silently ship uncleaned photos
     console.error('[imageStudio] photo cleanup failed, using original:', String((err as Error)?.message ?? err).slice(0, 300));
     return { ...image, enhanced: false };
   }

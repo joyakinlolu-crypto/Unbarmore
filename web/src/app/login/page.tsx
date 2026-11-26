@@ -17,6 +17,9 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
           <p className="text-sm text-slate-500">Your business co-pilot — no password needed</p>
         </div>
         <LoginForm bot={botNumber()} expired={error === 'expired'} />
+        <p className="mt-5 text-center text-xs text-slate-400">
+          By continuing you agree to our <a href="/terms" className="underline">Terms</a> and <a href="/privacy" className="underline">Privacy Policy</a>.
+        </p>
       </div>
     </main>
   );

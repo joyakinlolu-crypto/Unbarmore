@@ -29,8 +29,10 @@ export default function Chat({ initial, tier, bot, freeLeft, freeLimit, prefill 
     const uid = crypto.randomUUID(), aid = crypto.randomUUID();
     setMsgs((m) => [...m, { id: uid, role: 'user', content: message }, { id: aid, role: 'assistant', content: '' }]);
     const rollback = () => setMsgs((m) => m.filter((x) => x.id !== uid && x.id !== aid));
+    // The server stops at 25s; this is the browser's own safety net so the screen can never sit on "Checking your numbers…".
+    const ctl = new AbortController(); const hardStop = setTimeout(() => ctl.abort(), 32_000);
     try {
-      const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message }) });
+      const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message }), signal: ctl.signal });
       if (res.status === 402) { rollback(); setLeft(0); return; }
       if (res.status === 429) { rollback(); setInput(message); setNotice('slow'); return; }
       if (res.status === 401) { window.location.href = '/login'; return; }
@@ -48,7 +50,7 @@ export default function Chat({ initial, tier, bot, freeLeft, freeLimit, prefill 
       }
       if (left !== null) setLeft(Math.max(0, left - 1));
     } catch { rollback(); setInput(message); setNotice('fail'); }
-    finally { setBusy(false); }
+    finally { clearTimeout(hardStop); setBusy(false); }
   }
 
   const copy = async (id: string, t: string) => {
@@ -94,7 +96,7 @@ export default function Chat({ initial, tier, bot, freeLeft, freeLimit, prefill 
       </div>
 
       {notice === 'slow' && <p className="px-4 pb-1 text-xs text-alert">Slow down a little — try again in a minute.</p>}
-      {notice === 'fail' && <p className="px-4 pb-1 text-xs text-alert" role="alert">Couldn’t get an answer. Your message wasn’t counted — please retry.</p>}
+      {notice === 'fail' && <p className="px-4 pb-1 text-xs text-alert" role="alert">The advisor is busy right now. Your message wasn’t counted — please try again in a minute.</p>}
       {left !== null && left > 0 && <p className="px-4 pb-1 text-xs text-slate-400">{left} free {left === 1 ? 'chat' : 'chats'} left this month ({tier === 'trial' ? 'trial' : 'free plan'})</p>}
 
       <form onSubmit={(e) => { e.preventDefault(); void send(input); }} className="flex items-end gap-2 border-t border-slate-100 bg-white px-3 py-2">

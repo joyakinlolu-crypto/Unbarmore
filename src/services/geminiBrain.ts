@@ -1,6 +1,7 @@
 import { GoogleGenAI, type Part } from '@google/genai';
 import { z } from 'zod';
 import { env } from '../config/env.js';
+import { noteGeminiError } from '../lib/alerts.js';
 import { MINI_VIDEO } from '../config/plans.js';
 
 export const genai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
@@ -169,6 +170,7 @@ export async function generateStructured<T>(opts: {
       }
     }
   }
+  void noteGeminiError('text', lastErr);
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 

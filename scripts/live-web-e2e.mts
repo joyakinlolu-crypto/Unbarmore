@@ -88,6 +88,14 @@ try {
   } else {
     ok('before migration 005 the screen says "Cash left" (sales − expenses − stock), never "Profit"', /Cash left this month ₦120,000/.test(dTxt) && /Expenses ₦80,000/.test(dTxt) && !/Profit this month/.test(dTxt), (dTxt.match(/Cash left this month.{0,60}/) ?? [''])[0]);
   }
+  // Public legal pages (needed for Meta Business Verification): reachable WITHOUT logging in
+  for (const [path, must] of [['/privacy', [/Nigeria Data Protection Act/, /DELETE MY DATA/, /Google \(Gemini API\)/, /Paystack/, /within 30 days/, /72 hours/, /NDPC/]], ['/terms', [/Terms of Service/, /Referral credits/, /AI can be wrong/, /Federal Republic of Nigeria/]]] as const) {
+    const lr = await fetch(`${BASE}${path}`, { redirect: 'manual' });
+    const lt = text(await lr.text());
+    ok(`${path} is PUBLIC (200, no login) and covers: ${must.map((m) => m.source.replace(/\\/g, '')).join(' · ')}`, lr.status === 200 && must.every((m) => m.test(lt)), `HTTP ${lr.status}`);
+  }
+  const loginHtml = text(await (await fetch(`${BASE}/login`)).text());
+  ok('the login page links to the Terms and Privacy Policy', /Terms/.test(loginHtml) && /Privacy Policy/.test(loginHtml));
   ok('Customers owe you ₦95,000 (1 customer)', /Customers owe you ₦95,000 1 customer/.test(dTxt));
   ok('expense breakdown lists Fuel/Diesel ₦60,000 and Rent ₦20,000', dTxt.includes('Fuel/Diesel') && dTxt.includes('₦60,000') && dTxt.includes('Rent/Utilities') && dTxt.includes('₦20,000'));
   ok('plan badge shows Free trial', dTxt.includes('Free trial'));
@@ -236,10 +244,10 @@ try {
       await page.locator('textarea').fill(q);
       await page.locator('textarea').press('Enter');
       const done = page.locator('div.bg-mist button:has-text("Copy")').nth(i);
-      const failed = page.locator('text=/Couldn.t get an answer/');
-      // The route now bounds itself to <60s, so within 150s we must see either an answer or the graceful failure notice.
-      const winner = await Promise.race([done.waitFor({ timeout: 150_000 }).then(() => 'ok'), failed.waitFor({ timeout: 150_000 }).then(() => 'fail')]).catch(() => 'timeout');
-      if (winner === 'timeout') throw new Error(`message ${i + 1}: neither an answer nor a graceful failure within 150s (route is not bounded)`);
+      const failed = page.locator('text=/advisor is busy right now/');
+      // The route now bounds itself to <60s, so within 40s we must see either an answer or the graceful failure notice (25s server budget + 32s browser guard).
+      const winner = await Promise.race([done.waitFor({ timeout: 45_000 }).then(() => 'ok'), failed.waitFor({ timeout: 45_000 }).then(() => 'fail')]).catch(() => 'timeout');
+      if (winner === 'timeout') throw new Error(`message ${i + 1}: neither an answer nor a graceful failure within the time limit (the 25s budget is not working)`);
       if (winner === 'ok') break;
       console.log(`   ⚠️  message ${i + 1}: Gemini overloaded, graceful failure shown — retrying (${tries}/4)`);
       const { data: leftover } = await db.from('web_chat_messages').select('id').eq('business_id', bid).eq('role', 'user');

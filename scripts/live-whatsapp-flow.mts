@@ -80,7 +80,7 @@ const APOLOGY = /couldn.t process that|couldn.t read those photos/i;
 const logFile = path.join(os.tmpdir(), `bot-${Date.now()}.log`);
 const bot: ChildProcess = spawn('npx', ['tsx', 'src/server.ts'], {
   detached: true, // own process group, so the whole tree (npx → tsx → node) can be stopped; a stale bot on the test port serves old code
-  env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1', ADMIN_PHONE: PH, SUPPORT_WHATSAPP_URL: 'https://wa.me/2348100000002', INTERIM_NOTICE_MS: '1000' },
+  env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, INTERNAL_ALERT_KEY: 'test-internal-key-123456', WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1', ADMIN_PHONE: PH, SUPPORT_WHATSAPP_URL: 'https://wa.me/2348100000002', INTERIM_NOTICE_MS: '1000' },
   stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')],
 });
 
@@ -273,6 +273,36 @@ try {
   // ───── 12d. ADMIN: only the admin number ─────
   r = await ask('admin', () => text('ADMIN'), (v) => /live stats/i.test(v.text));
   ok('ADMIN from ADMIN_PHONE → live platform stats from the database', !!r.reply && /Businesses/.test(r.reply.text) && /Est\. MRR/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+  // ───── 12d-2. FAILURE ALERTS: TEST ALERT reaches the admin's WhatsApp, and ALERTS lists them ─────
+  const aStart = sent.length;
+  r = await ask('test-alert', () => text('TEST ALERT'), (v) => /Test alert sent/.test(v.text));
+  const alertMsg = sent.slice(aStart).map(view).find((v) => /Unbarmore alert/.test(v.text));
+  ok('ADMIN: TEST ALERT → a 🚨 alert message arrives on WhatsApp, plus a confirmation', !!r.reply && !!alertMsg && /Test alert: if you can read this/.test(alertMsg.text), alertMsg?.text.replace(/\n/g, ' | '));
+  r = await ask('alerts-list', () => text('ALERTS'), (v) => /Recent alerts|No alerts/.test(v.text));
+  ok('ADMIN: ALERTS lists what went wrong recently', !!r.reply && /Test alert/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 160));
+  // health endpoints: liveness (cheap) and deep (redis + database + video backlog) for the uptime monitor
+  const hz = await fetch(`${BOT}/healthz`); const hd = await fetch(`${BOT}/healthz/deep`); const hdj = await hd.json() as { ok: boolean; checks: Record<string, unknown> };
+  ok('/healthz answers instantly (liveness) and /healthz/deep confirms Redis + database + video queue', hz.status === 200 && hd.status === 200 && hdj.ok && hdj.checks.redis === 'ok' && hdj.checks.database === 'ok', JSON.stringify(hdj.checks));
+  // the website reports its own failures (e.g. advisor 402) to the bot, which forwards them to the admin's WhatsApp
+  const noKey = await fetch(`${BOT}/internal/alert`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'x', message: 'hi' }) });
+  const badKey = await fetch(`${BOT}/internal/alert`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-key': 'wrong-key-wrong-key-12' }, body: JSON.stringify({ source: 'x', message: 'hi' }) });
+  ok('/internal/alert refuses requests without the shared secret (401) and with a wrong one (401)', noKey.status === 401 && badKey.status === 401, `${noKey.status}/${badKey.status}`);
+  const wStart = sent.length;
+  const goodKey = await fetch(`${BOT}/internal/alert`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-key': 'test-internal-key-123456' }, body: JSON.stringify({ source: 'website advisor', message: 'advisor failed: {"error":{"code":402,"message":"Your prepayment credits are depleted."}}' }) });
+  const tw = Date.now(); while (Date.now() - tw < 20_000 && !sent.slice(wStart).map(view).some((v) => /credits are used up/.test(v.text))) await sleep(300);
+  const wAlert = sent.slice(wStart).map(view).find((v) => /credits are used up/.test(v.text));
+  ok('website advisor hits Gemini 402 → the admin gets "Gemini credits are used up (402)… ai.studio/projects" on WhatsApp', goodKey.status === 200 && !!wAlert && /ai\.studio\/projects/.test(wAlert.text), wAlert?.text.replace(/\n/g, ' | ').slice(0, 200));
+  // DELETE MY DATA: acknowledged to the user, and the admin is alerted to fulfil it
+  const dStart = sent.length;
+  r = await ask('delete-my-data', () => text('DELETE MY DATA'), (v) => /request received/.test(v.text));
+  const dAlert = await (async () => { const t = Date.now(); while (Date.now() - t < 15_000) { const f = sent.slice(dStart).map(view).find((v) => /DATA DELETION REQUEST/.test(v.text)); if (f) return f; await sleep(300); } return undefined; })();
+  ok('DELETE MY DATA → user told "request received… within 30 days", and the admin gets a 🚨 DATA DELETION REQUEST alert', !!r.reply && /30 days/.test(r.reply.text) && !!dAlert && /Ada Fabrics/.test(dAlert.text), dAlert?.text.replace(/\n/g, ' | ').slice(0, 200));
+
+  const notAdmin = sent.length;
+  await webhook({ type: 'text', text: { body: 'TEST ALERT' } }, undefined, PH2);
+  await sleep(6000);
+  ok('TEST ALERT from anyone else does nothing for the admin (no alert goes out)', !sent.slice(notAdmin).map(view).some((v) => /Unbarmore alert/.test(v.text)));
+
   const b3 = sent.length;
   await webhook({ type: 'text', text: { body: 'ADMIN' } }, undefined, PH2);
   const t3 = Date.now(); while (Date.now() - t3 < 30_000 && sent.length === b3) await sleep(300);
@@ -689,6 +719,34 @@ try {
   ok('the morning note\'s [📲 Open my app] button replies with a fresh one-tap login link', !!r.reply && /auth\/verify\?token=/.test(r.reply.text));
   r = await ask('winback-btn', () => button('WINBACK'), (v) => v.text.length > 10, 40_000);
   ok('the morning note\'s [👋 Win back] button works', !!r.reply && /Nobody has gone quiet|Win-back messages/.test(r.reply.text), r.reply?.text.slice(0, 80));
+
+  // ───── FAILURE ALERTS: a real video failure; delivered at once, or queued when the 24h window is closed ─────
+  const { Queue } = await import('bullmq');
+  const ru = new URL(process.env.REDIS_URL!);
+  const vq = new Queue('video-render', { connection: { host: ru.hostname, port: Number(ru.port || 6379) } });
+  const mkJob = async (label: string) => {
+    const prodR = await fetch(`${SB}/rest/v1/products`, { method: 'POST', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ business_id: biz!.id, sku_code: `UNB-${label}`, name: `Alert Test ${label}` }) });
+    const prod = (await prodR.json())[0];
+    const jobR = await fetch(`${SB}/rest/v1/video_jobs`, { method: 'POST', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json', Prefer: 'return=representation' }, body: JSON.stringify({ business_id: biz!.id, product_id: prod.id, raw_image_urls: ['does-not/exist.jpg'], include_watermark: true, voice_language: 'en-NG' }) });
+    const job = (await jobR.json())[0];
+    await vq.add('render', { videoId: job.id, businessId: biz!.id, phone: PH }, { jobId: `video-${job.id}`, attempts: 1 });
+    return job.id as string;
+  };
+  const vStart = sent.length;
+  await mkJob('AAA');
+  const tv2 = Date.now(); while (Date.now() - tv2 < 60_000 && !sent.slice(vStart).map(view).some((v) => /Unbarmore alert/.test(v.text))) await sleep(500);
+  const vAlert = sent.slice(vStart).map(view).find((v) => /Unbarmore alert/.test(v.text));
+  ok('a failed video → the admin gets a 🎬 alert naming the product, the shop and the reason', !!vAlert && /Video FAILED \(gave up\): Alert Test AAA · Ada Fabrics/.test(vAlert.text), vAlert?.text.replace(/\n/g, ' | ').slice(0, 220));
+
+  // 24h window closed: nothing can be sent first on WhatsApp, so the alert is HELD and handed over when the admin next messages.
+  await rest(`whatsapp_sessions?phone_number=eq.${PH}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ last_inbound_at: new Date(Date.now() - 30 * 3600_000).toISOString() }) });
+  const qStart = sent.length;
+  await mkJob('BBB');
+  await sleep(12_000);
+  ok('window closed → the alert is NOT sent (would be a paid/blocked message), it is held', !sent.slice(qStart).map(view).some((v) => /Alert Test BBB/.test(v.text) && /Unbarmore alert/.test(v.text)));
+  r = await ask('missed-alerts', () => text('ALERTS'), (v) => /while your WhatsApp window was closed/.test(v.text), 40_000);
+  ok('…and the moment the admin messages the bot, the held alert arrives: "1 alert while your WhatsApp window was closed"', !!r.reply && /Alert Test BBB/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
+  await vq.close();
 
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));

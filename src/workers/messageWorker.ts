@@ -28,6 +28,8 @@ import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.
 import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { displayPhone } from '../lib/phone.js';
+import { alertAdmin } from '../lib/alerts.js';
+import { adminAlertCommand, deleteDataRequest, missedAlertsReply } from '../flows/adminAlerts.js';
 import { closeShopReply } from '../flows/close.js';
 import { AWAIT_LOGO_KEY, AWAIT_LOGO_TTL_S, logoAskReply, saveLogo, useNameAsLogo } from '../flows/branding.js';
 import { customerReceiptReply, latestReceiptBatch } from '../flows/receipts.js';
@@ -105,7 +107,13 @@ async function processInbound(job: Job<InboundJob & { claimed?: boolean }>, toke
 async function handle(msg: WaInboundMessage, profileName: string | null): Promise<Reply | null> {
   const phone = msg.from;
   if (msg.type === 'text' && /^admin$/i.test(msg.text?.body?.trim() ?? '') && isAdmin(phone)) return adminStatsReply(phone);
+  if (isAdmin(phone)) { // the owner just messaged: their 24h window is open, so hand over any alerts that were waiting
+    const missed = await missedAlertsReply(phone);
+    if (missed) await sendReplySafely(missed, phone);
+  }
   if (msg.type === 'text' && isAdmin(phone)) {
+    const alertCmd = await adminAlertCommand(phone, msg.text?.body ?? ''); // ALERTS · TEST ALERT
+    if (alertCmd) return alertCmd;
     const cmd = await adminPayoutCommand(phone, msg.text?.body ?? ''); // PAYOUTS · PAID WD-XXXXXX · REJECT WD-XXXXXX
     if (cmd) { if (cmd.userNotice) await sendReplySafely(cmd.userNotice.reply, cmd.userNotice.to); return cmd.reply; }
   }
@@ -371,6 +379,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (rcpt) { const who = rcpt[1]?.trim(); return customerReceiptReply(actor, await latestReceiptBatch(actor, who), who); }
   const remake = t.match(/^(?:(yoruba|pidgin|english) video|video (?:in )?(yoruba|pidgin|english)|make (?:it|that|the video) (?:in )?(yoruba|pidgin|english))$/i);
   if (remake && !actor.isStaff) return remakeLastVideo(actor, (remake[1] ?? remake[2] ?? remake[3])!.toLowerCase() as Voice);
+  if (/^delete (?:all )?my (?:data|account)$/i.test(t)) return deleteDataRequest(actor.phone, { business: b.name, role: actor.isStaff ? 'staff' : 'owner' });
   const num = t.match(/^(?:my|sales|shop|video) (?:whatsapp )?number(?:\s+(.+))?$/i);
   if (num && !actor.isStaff) return setSalesNumber(actor, num[1]?.trim());
   if (upper === 'LOGO' && !actor.isStaff) { await redis.set(AWAIT_LOGO_KEY(actor.phone), '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
@@ -763,10 +772,12 @@ export function startMessageWorkers() {
   inbound.on('failed', (job, err) => {
     if (!job || err instanceof DelayedError || job.attemptsMade < (job.opts.attempts ?? 1)) return;
     console.error('[inbound] failed', job.data.msg.id, err);
+    void alertAdmin('worker', `Could not process a customer message (…${job.data.msg.from.slice(-4)}, type ${job.data.msg.type})`, String((err as Error)?.message ?? err), { key: String((err as Error)?.message ?? err).slice(0, 60), cooldownS: 900 });
     void reply(job.data.msg.from).text('😓 Sorry, I couldn\'t process that. Please try again in a minute.').send().catch(() => undefined);
   });
   images.on('failed', (job, err) => {
     console.error('[images] failed', job?.data.phone, err);
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) void alertAdmin('worker', `Photo batch failed (…${job.data.phone.slice(-4)})`, String((err as Error)?.message ?? err), { key: String((err as Error)?.message ?? err).slice(0, 60), cooldownS: 900 });
     if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
       void reply(job.data.phone).text('😓 I couldn\'t read those photos. Please send them again.').send().catch(() => undefined);
     }

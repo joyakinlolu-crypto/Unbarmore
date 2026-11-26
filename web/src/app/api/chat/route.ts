@@ -3,12 +3,22 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { buildAdvisorSystemPrompt, buildBusinessSnapshot, isFinalFreeMessage } from '@/lib/advisorContext';
 import { getSession } from '@/lib/auth';
 import { db } from '@/lib/supabase';
+import { streamWithFallback, type AiLike } from '@/lib/advisorStream';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const ERR = '\u0000ERR:';
+
+/** Tell the platform owner (WhatsApp) that the advisor failed, e.g. Gemini credits ran out. Never blocks or breaks the answer. */
+async function reportToBot(message: string) {
+  const url = process.env.BOT_URL, key = process.env.INTERNAL_ALERT_KEY;
+  if (!url || !key) return;
+  try {
+    await fetch(`${url.replace(/\/$/, '')}/internal/alert`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-key': key }, body: JSON.stringify({ source: 'website advisor', message: message.slice(0, 400) }), signal: AbortSignal.timeout(3000) });
+  } catch { /* alerting must never break the advisor */ }
+}
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -53,39 +63,22 @@ export async function POST(req: NextRequest) {
       let open = true;
       const push = (t: string) => { if (!open) return; try { controller.enqueue(encoder.encode(t)); } catch { open = false; } };
       try {
-        const models = [process.env.GEMINI_TEXT_MODEL || 'gemini-3.1-flash-lite', process.env.GEMINI_TEXT_FALLBACK_MODEL || 'gemini-3.5-flash-lite']
+        // Three models, one HARD 25-second budget for the whole answer: a slow or overloaded Google can never hang the dashboard.
+        const models = [process.env.GEMINI_TEXT_MODEL || 'gemini-3.1-flash-lite', process.env.GEMINI_TEXT_FALLBACK_MODEL || 'gemini-3.5-flash-lite', process.env.GEMINI_TEXT_FALLBACK2_MODEL || 'gemini-2.5-flash']
           .filter((m, i, a) => a.indexOf(m) === i);
-        let stream: Awaited<ReturnType<typeof ai.models.generateContentStream>> | null = null;
-        let lastErr: unknown;
-        const startedAt = Date.now(); // hard budget: maxDuration is 60s, so stop starting new attempts after 35s
-        // Try the primary model, then the fallback, BEFORE the first byte is streamed (503 "high demand" happens at stream start).
-        for (const model of models) {
-          // Gemini answers 503 "high demand" in short spikes: one quick retry per model before falling back.
-          for (let attempt = 0; attempt < 2 && !stream && Date.now() - startedAt < 35_000; attempt++) {
-            try {
-              stream = await ai.models.generateContentStream({
-                model,
-                contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
-                config: { systemInstruction, temperature: 0.5, maxOutputTokens: 1200, httpOptions: { timeout: 25_000 } }, // a hung attempt is abandoned, not waited on
-              });
-            } catch (e) {
-              lastErr = e;
-              // retry only fast transient errors (503 etc.); a timeout/abort means the model is hung → go straight to the fallback
-              if (!/\b(429|500|503)\b|high demand|UNAVAILABLE|RESOURCE_EXHAUSTED/i.test(String((e as Error)?.message ?? e))) break;
-              await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
-            }
-          }
-          if (stream) break;
-        }
-        if (!stream) throw lastErr;
-        for await (const chunk of stream) {
-          const t = chunk.text;
-          if (t) { full += t; push(t); }
-        }
+        const result = await streamWithFallback({
+          ai: ai as unknown as AiLike, models,
+          contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
+          config: { systemInstruction, temperature: 0.5, maxOutputTokens: 1200 },
+          onText: (t) => { full += t; push(t); },
+          budgetMs: 25_000,
+        });
+        if (result.truncated) { const note = '\n\n_⏱ The advisor slowed down, so this answer was cut short. Ask again for the rest._'; full += note; push(note); }
         if (!full.trim()) throw new Error('empty response');
         await db.from('web_chat_messages').insert({ business_id: businessId, user_id: session.sub, role: 'assistant', content: full });
       } catch (e) {
         console.error('[chat]', e);
+        await reportToBot(`advisor failed: ${String((e as Error)?.message ?? e)}`);
         // Don't charge a free-tier message for a failed answer.
         await db.from('web_chat_messages').delete().eq('id', userRow.id);
         push(`${ERR}failed`);

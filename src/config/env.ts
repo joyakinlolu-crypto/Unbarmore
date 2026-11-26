@@ -18,6 +18,8 @@ const schema = z.object({
   OPS_ALERT_PHONE: z.string().optional(),
   /** Owner of the platform: the only number that can use the ADMIN command (digits, e.g. 2348012345678). */
   ADMIN_PHONE: z.string().regex(/^\d{10,15}$/).optional(),
+  /** Shared secret that lets the website report its own failures (e.g. the advisor) to POST /internal/alert. */
+  INTERNAL_ALERT_KEY: z.string().min(16).optional(),
   /** Shown by SUPPORT and when payments aren't live yet, e.g. https://wa.me/2348012345678 */
   SUPPORT_WHATSAPP_URL: z.string().url().optional(),
   /** If the AI takes longer than this to answer, the user gets a short "Processing your entry…" note. */

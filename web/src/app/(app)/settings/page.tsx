@@ -77,6 +77,14 @@ export default async function Settings() {
           : <p className="text-sm text-slate-500">Available on the Growth plan.</p>}
       </section>
 
+      <section className={card}>
+        <h2 className="mb-1 font-semibold">Privacy &amp; terms</h2>
+        <p className="text-sm text-slate-500">
+          <a href="/privacy" className="font-semibold text-royal underline">Privacy Policy</a> · <a href="/terms" className="font-semibold text-royal underline">Terms of Service</a>
+        </p>
+        <p className="mt-2 text-sm text-slate-500">To delete your account and data, send <b>DELETE MY DATA</b> to the WhatsApp bot.</p>
+      </section>
+
       <LogoutButton />
     </main>
   );

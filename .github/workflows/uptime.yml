@@ -1,0 +1,40 @@
+# Uptime monitor: every 10 minutes, check that the bot and the website answer.
+# If either is down this run FAILS, and GitHub emails you ("Run failed: Uptime check").
+# (The bot cannot alert you about its own death, and WhatsApp alerts need the bot alive: this is the outside watcher.)
+name: Uptime check
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Bot is alive and can reach its database and queue
+        run: |
+          set -e
+          for i in 1 2 3; do
+            code=$(curl -s -o /tmp/deep.json -w '%{http_code}' --max-time 20 https://unbarmore-production.up.railway.app/healthz/deep || true)
+            [ "$code" = "200" ] && { cat /tmp/deep.json; echo; exit 0; }
+            echo "attempt $i: HTTP $code"; cat /tmp/deep.json 2>/dev/null || true; echo
+            sleep 20
+          done
+          echo "::error::Unbarmore bot health check FAILED (see body above)"; exit 1
+      - name: Website is up
+        run: |
+          set -e
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://unbarmore.vercel.app/login || true)
+            [ "$code" = "200" ] && { echo "website OK"; exit 0; }
+            echo "attempt $i: HTTP $code"; sleep 20
+          done
+          echo "::error::Unbarmore website is DOWN"; exit 1
+      - name: Legal pages are public (Meta needs them reachable)
+        run: |
+          for p in privacy terms; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://unbarmore.vercel.app/$p || true)
+            [ "$code" = "200" ] || { echo "::error::/$p returned HTTP $code"; exit 1; }
+          done
+          echo "privacy and terms OK"

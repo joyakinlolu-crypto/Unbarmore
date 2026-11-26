@@ -1,6 +1,7 @@
 import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 import { GoogleGenAI } from '@google/genai';
 import { env } from '../config/env.js';
+import { noteGeminiError } from '../lib/alerts.js';
 
 export interface Voiceover { data: Buffer; ext: 'mp3' | 'wav'; mime: string }
 
@@ -48,6 +49,7 @@ async function geminiTts(text: string, yoruba = false): Promise<Voiceover> {
       } catch (e) { lastErr = e; } // out of quota / overloaded → next model, then next round
     }
   }
+  void noteGeminiError('voice', lastErr);
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 

@@ -9,6 +9,9 @@ import { ngn } from './lib/money.js';
 import { startMessageWorkers } from './workers/messageWorker.js';
 import { startVideoWorker } from './workers/videoWorker.js';
 import { registerSchedules, startCronWorker } from './jobs/cronJobs.js';
+import { alertAdmin, noteGeminiError } from './lib/alerts.js';
+import { timingSafeEqual } from 'node:crypto';
+import { videoQueue } from './lib/queues.js';
 
 const app = Fastify({
   logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug', redact: ['req.headers.authorization', 'req.headers["x-hub-signature-256"]'] },
@@ -30,7 +33,44 @@ const rawOf = (req: unknown) => (req as { rawBody?: Buffer }).rawBody ?? Buffer.
 
 await app.register(rateLimit, { global: false });
 
+// Liveness only (Railway restarts the container if this stops answering). Deliberately does NOT touch the database:
+// a database outage can't be fixed by restarting the bot, and restart loops would only make it worse.
 app.get('/healthz', async () => ({ ok: true }));
+
+const within = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
+// Deep check for the uptime monitor: can we reach Redis and the database, and are videos piling up or failing?
+app.get('/healthz/deep', async (_req, res) => {
+  const checks: Record<string, string | number> = {};
+  let ok = true;
+  try { await within(videoQueue.getJobCounts('waiting'), 3000); checks.redis = 'ok'; } catch (e) { ok = false; checks.redis = `FAIL ${String((e as Error).message).slice(0, 60)}`; }
+  try { const { error } = await within(Promise.resolve(db.from('businesses').select('id', { head: true, count: 'exact' }).limit(1)), 3000); if (error) throw new Error(error.message); checks.database = 'ok'; } catch (e) { ok = false; checks.database = `FAIL ${String((e as Error).message).slice(0, 60)}`; }
+  try { const c = await within(videoQueue.getJobCounts('waiting', 'active', 'failed'), 3000); checks.videosWaiting = c.waiting ?? 0; checks.videosFailed7d = c.failed ?? 0; if ((c.waiting ?? 0) > 20) { ok = false; checks.videoQueue = 'BACKLOG'; } } catch { /* redis check already reports it */ }
+  return res.code(ok ? 200 : 503).send({ ok, uptimeS: Math.round(process.uptime()), checks });
+});
+
+// The website reports its own failures here (e.g. the advisor could not reach Gemini) so they reach the owner's WhatsApp too.
+app.post('/internal/alert', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, res) => {
+  const key = String(req.headers['x-internal-key'] ?? '');
+  const want = env.INTERNAL_ALERT_KEY ?? '';
+  if (!want || key.length !== want.length || !timingSafeEqual(Buffer.from(key), Buffer.from(want))) return res.code(401).send('no');
+  const { source = 'website', message = '' } = (req.body ?? {}) as { source?: string; message?: string };
+  const m = String(message).slice(0, 400);
+  if (/gemini|generativelanguage|prepayment|RESOURCE_EXHAUSTED|UNAVAILABLE|\b(401|402|403|429|500|503)\b/i.test(m)) await noteGeminiError(String(source).slice(0, 30), new Error(m));
+  else await alertAdmin('system', `Website problem (${String(source).slice(0, 30)})`, m, { key: m.slice(0, 50), cooldownS: 900 });
+  return res.code(200).send('ok');
+});
+
+// Any unexpected server error (not the client's fault) reaches the owner.
+app.setErrorHandler((error, req, res) => {
+  const err = error as Error & { statusCode?: number };
+  const status = err.statusCode ?? 500;
+  if (status >= 500) {
+    req.log.error({ err }, 'unhandled request error');
+    void alertAdmin('webhook', `Server error on ${req.method} ${(req.routeOptions?.url ?? req.url).split('?')[0]}`, err.message, { key: `${req.method}${req.routeOptions?.url}${err.message.slice(0, 40)}`, cooldownS: 600 });
+  }
+  return res.code(status).send({ error: status >= 500 ? 'internal' : err.message });
+});
 
 // ═════════════════════════ META WHATSAPP ═════════════════════════
 
@@ -57,6 +97,7 @@ app.post('/webhooks/whatsapp', { config: { rateLimit: { max: 600, timeWindow: '1
     }
   } catch (err) {
     req.log.error({ err }, 'webhook enqueue failed');
+    void alertAdmin('webhook', 'WhatsApp webhook could not queue an incoming message (it may be LOST)', String((err as Error)?.message ?? err), { key: 'enqueue', cooldownS: 300 });
   }
 });
 
@@ -91,6 +132,7 @@ app.post('/webhooks/paystack', async (req, res) => {
     }
   } catch (err) {
     req.log.error({ err }, 'paystack webhook failed');
+    void alertAdmin('webhook', 'Paystack webhook failed (a payment may not have been applied)', String((err as Error)?.message ?? err), { key: 'paystack', cooldownS: 300 });
     // 5xx → Paystack retries; our billing_events idempotency makes replays safe.
     return res.code(500).send('error');
   }
@@ -123,5 +165,14 @@ const shutdown = async (sig: string) => {
   await Promise.allSettled(closers.map((c) => c()));
   process.exit(0);
 };
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+  void alertAdmin('system', 'Unhandled promise rejection', String((reason as Error)?.message ?? reason), { key: String((reason as Error)?.message ?? reason).slice(0, 60), cooldownS: 900 });
+});
+process.on('uncaughtException', async (err) => {
+  console.error('[uncaughtException]', err);
+  await Promise.race([alertAdmin('system', 'The bot crashed (uncaught exception) and is restarting', err.message, { key: err.message.slice(0, 60), cooldownS: 300 }), new Promise((r) => setTimeout(r, 3000))]);
+  process.exit(1);
+});
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
