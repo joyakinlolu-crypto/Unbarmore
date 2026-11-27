@@ -563,7 +563,6 @@ try {
     const wav = path.join(tmp, 'vo-check.wav');
     if (!as) { ok('(skipped: this video has no audio because Google speech is rate-limited right now; the check above already reported it)', true); } else {
     execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
-    if (hasAudio) {
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
     let said = '';
@@ -656,6 +655,7 @@ try {
     if (hasAudio) execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
     const durY = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).toString());
     ok('a bought credit makes a FULL-length video (more than 13 s), not the ~10 s trial preview', durY > 13, `${durY.toFixed(1)}s`);
+    if (hasAudio) {
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
     let said = '';
