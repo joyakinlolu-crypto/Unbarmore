@@ -153,8 +153,10 @@ try {
   ok('webhook answered Meta instantly (200)', r.status === 200);
   ok('no business is created until a name is given', (await rows(`businesses?owner_phone=eq.${PH}&select=id`)).length === 0);
 
-  r = await ask('name-greeting', () => text('Hello'), (v) => /doesn.t look like a business name/i.test(v.text));
+  r = await ask('name-greeting', () => text('Hello'), (v) => /short name/i.test(v.text));
   ok('answering "Hello" to "What is your business name?" is refused and asked again (no business called "Hello")', !!r.reply && (await rows(`businesses?owner_phone=eq.${PH}&select=id`)).length === 0, r.reply?.text.replace(/\n/g, ' | ').slice(0, 140));
+  r = await ask('name-sentence-long', () => text('We deal in herbal remedies for all kinds of health problems in Ibadan and beyond'), (v) => /short name/i.test(v.text));
+  ok('a description instead of a name ("We deal in herbal remedies…") is refused and the short name is asked for', !!r.reply && (await rows(`businesses?owner_phone=eq.${PH}&select=id`)).length === 0, r.reply?.text.replace(/\n/g, ' | ').slice(0, 120));
   r = await ask('name', () => text('Ada Fabrics'), (v) => /Ada Fabrics/.test(v.text) && v.buttons.some((b) => b.id === 'ONB_SKIP'));
   ok('business name → "set up" + a Skip button for the referral code', !!r.reply);
   const biz = (await rows(`businesses?owner_phone=eq.${PH}&select=id,name,subscription_tier,referral_code,tx_logged_this_month,trial_ends_at`))[0];
