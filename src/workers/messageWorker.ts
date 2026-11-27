@@ -29,6 +29,7 @@ import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { displayPhone } from '../lib/phone.js';
 import { alertAdmin } from '../lib/alerts.js';
+import { looksLikeBusinessName } from '../lib/businessName.js';
 import { adminAlertCommand, deleteDataRequest, missedAlertsReply } from '../flows/adminAlerts.js';
 import { closeShopReply } from '../flows/close.js';
 import { AWAIT_LOGO_KEY, AWAIT_LOGO_TTL_S, logoAskReply, saveLogo, useNameAsLogo } from '../flows/branding.js';
@@ -228,7 +229,7 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
 
   if (session.current_state === 'ONBOARDING_NAME') {
     const name = text.replace(/\s+/g, ' ').slice(0, 80);
-    if (name.length < 2) return reply(phone).text('Please type your business name (e.g. _Ada Fabrics_).');
+    if (!looksLikeBusinessName(name)) return reply(phone).text('That doesn\'t look like a business name. What do you call your business? It will show on your receipts, e.g. _Ada Fabrics_.');
     const biz = await createBusiness(phone, name, profileName);
     const savedCode = (session.pending_payload.referral_code as string | null) ?? null;
     if (savedCode) {
