@@ -381,6 +381,13 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   const remake = t.match(/^(?:(yoruba|pidgin|english) video|video (?:in )?(yoruba|pidgin|english)|make (?:it|that|the video) (?:in )?(yoruba|pidgin|english))$/i);
   if (remake && !actor.isStaff) return remakeLastVideo(actor, (remake[1] ?? remake[2] ?? remake[3])!.toLowerCase() as Voice);
   if (/^delete (?:all )?my (?:data|account)$/i.test(t)) return deleteDataRequest(actor.phone, { business: b.name, role: actor.isStaff ? 'staff' : 'owner' });
+  const ren = t.match(/^(?:rename (?:my )?(?:business|shop)|(?:my )?(?:business|shop) name(?: is)?|change (?:my )?(?:business|shop) name(?: to)?)\s+(.{2,80})$/i);
+  if (ren && !actor.isStaff) {
+    const newName = ren[1]!.replace(/\s+/g, ' ').trim();
+    if (!looksLikeBusinessName(newName)) return reply(actor.phone).text('That doesn\'t look like a business name. Try: _RENAME BUSINESS Ada Fabrics_');
+    await updateBusiness(actor.business.id, { name: newName });
+    return reply(actor.phone).text(`✅ Done. Your business is now *${newName}*. It shows on new receipts and in your app.`);
+  }
   const num = t.match(/^(?:my|sales|shop|video) (?:whatsapp )?number(?:\s+(.+))?$/i);
   if (num && !actor.isStaff) return setSalesNumber(actor, num[1]?.trim());
   if (upper === 'LOGO' && !actor.isStaff) { await redis.set(AWAIT_LOGO_KEY(actor.phone), '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
@@ -483,7 +490,7 @@ function helpMenu(actor: Actor): Reply {
     '🧾 Transfer screenshot → fake-alert check',
     '❓ Ask: "who owes me?", "profit this week"',
     '💬 Paste a customer\'s "too cost" → closing replies',
-    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo) · MY NUMBER (the number shown on your videos)',
+    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo) · MY NUMBER (the number shown on your videos) · RENAME BUSINESS (change your business name)',
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',

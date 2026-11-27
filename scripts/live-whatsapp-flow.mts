@@ -631,6 +631,13 @@ try {
   r = await ask('logo-photo', () => webhook({ type: 'image', image: { id: 'LOGO1', mime_type: 'image/jpeg' } }), (v) => /Logo saved/.test(v.text), 40_000);
   ok('sending the picture saves it as the logo (not treated as a product photo / video request)', !!r.reply && /Logo saved/.test(r.reply.text), r.reply?.text);
 
+  // ───── RENAME BUSINESS: fix a junk name (real accounts were created as "Hi" and "Sent") ─────
+  r = await ask('rename-bad', () => text('RENAME BUSINESS Hi'), (v) => /doesn.t look like a business name/.test(v.text));
+  ok('RENAME BUSINESS Hi → refused ("That doesn\'t look like a business name")', !!r.reply);
+  r = await ask('rename', () => text('RENAME BUSINESS Ada Fabrics Ltd'), (v) => /Your business is now/.test(v.text));
+  ok('RENAME BUSINESS Ada Fabrics Ltd → "Your business is now Ada Fabrics Ltd", saved in the database', !!r.reply && /Ada Fabrics Ltd/.test(r.reply.text) && (await rows(`businesses?id=eq.${biz!.id}&select=name`))[0]?.name === 'Ada Fabrics Ltd', r.reply?.text);
+  await ask('rename-back', () => text('RENAME BUSINESS Ada Fabrics'), (v) => /Your business is now/.test(v.text));
+
   // ───── MY NUMBER: the WhatsApp number printed on videos ─────
   const has006 = (await fetch(`${process.env.SUPABASE_URL}/rest/v1/businesses?select=sales_phone&limit=1`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } })).ok;
   console.log(`   ℹ️  database has migration 006 (sales_phone): ${has006 ? 'YES' : 'NO — testing the graceful path'}`);
