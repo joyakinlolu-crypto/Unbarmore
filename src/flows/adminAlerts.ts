@@ -2,6 +2,7 @@ import { alertAdmin, recentAlerts, takeMissedAlerts } from '../lib/alerts.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { addVideoCredits, db, isInServiceWindow } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
+import { scorecardReply } from './scorecard.js';
 
 const wat = (t: number) => new Date(t + 3600_000).toISOString().slice(5, 16).replace('T', ' ');
 
@@ -28,6 +29,8 @@ export async function adminAlertCommand(phone: string, text: string): Promise<Re
       return reply(phone).text(`Could not add credits: ${String((e as Error)?.message ?? e).slice(0, 120)} (has migration 008 been run?)`);
     }
   }
+  const sc = t.match(/^(?:score ?card|pilot)(?:\s+(\d{1,2}))?$/i);
+  if (sc) return scorecardReply(phone, sc[1] ? Number(sc[1]) : 7);
   if (/^costs?$/i.test(t)) return costsReply(phone);
   if (/^alerts?$/i.test(t)) {
     const list = await recentAlerts(10);

@@ -933,6 +933,8 @@ try {
     ok('the usage log recorded this shop\'s AI work (messages, scripts and voiceovers), with an estimated naira cost each', ['message', 'script', 'voiceover'].every((k) => kinds.has(k)) && usage.every((u: any) => Number(u.est_cost_ngn) >= 0), JSON.stringify(usage.map((u: any) => `${u.kind}:${u.calls}`)));
     r = await ask('costs', () => text('COSTS'), (v) => /AI cost, last 7 days|No AI usage/.test(v.text));
     ok('admin: COSTS → "AI cost, last 7 days (estimates)" with a total and a per-shop line', !!r.reply && /AI cost, last 7 days/.test(r.reply.text) && /Ada Fabrics/.test(r.reply.text) && /By kind/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 260));
+    r = await ask('scorecard', () => text('SCORECARD'), (v) => /Pilot scorecard|No real shops/.test(v.text));
+    ok('admin SCORECARD → the pilot verdict + cohort numbers + a line per real shop (test accounts excluded), ONE message under the size limit', !!r.reply && real(r.all).length === 1 && r.reply.text.length < 4096 && (/No real shops/.test(r.reply.text) || (/Shops:/.test(r.reply.text) && !/Ada Fabrics/.test(r.reply.text))), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
   } else {
     r = await ask('costs', () => text('COSTS'), (v) => /not set up|No AI usage/.test(v.text));
     ok('admin: COSTS before migration 008 → says the usage log is not set up (no crash)', !!r.reply, r.reply?.text);
