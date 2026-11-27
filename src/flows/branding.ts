@@ -31,9 +31,10 @@ export function logoPrompt(phone: string, batchId: string | null): Reply {
     .text(
       '🖼️ *Do you have a logo?*',
       'It goes at the top of your receipts, so customers see your brand.',
-      'No logo? No problem: I\'ll use your business name as your logo.',
+      'No logo? I can design a clean one for you in a few seconds, free.',
     )
     .button(`LOGO:ask:${batchId ?? '-'}`, '📷 Send my logo')
+    .button(`LOGO:make:${batchId ?? '-'}`, '✨ Make me one')
     .button(`LOGO:name:${batchId ?? '-'}`, 'Use my name');
 }
 

@@ -28,6 +28,9 @@ import { parseChaseCommand, parsePromise } from '../lib/debtReminders.js';
 import { recordPromise } from '../flows/promises.js';
 import { occurredAt } from '../lib/sentAt.js';
 import { cashCountReply, splitCommandReply } from '../flows/cashCount.js';
+import { createQuote, payDetailsReply, quoteCancel, quoteExtend, quotePaid, quotesListReply } from '../flows/quotes.js';
+import { parsePayDetailsCommand, parseQuoteCommand } from '../lib/quote.js';
+import { FLYER_HELP, FLYER_PER_DAY, flyerReply, isFlyerCaption, logoColourPicker, makeLogoReply, pickPalette } from '../flows/flyer.js';
 import { parseCount } from '../lib/cashCount.js';
 import { remakeLastVideo, startVideo } from '../flows/video.js';
 import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.js';
@@ -449,6 +452,17 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     await setReminders(b.id, true);
     return reply(actor.phone).text('✅ Back on. You\'ll hear from me at 7 AM (who to follow up) and 9 PM (how your day went).');
   }
+  const qcmd = parseQuoteCommand(t);
+  if (qcmd) {
+    if (qcmd.action === 'paid') return quotePaid(actor, { no: qcmd.no }, qcmd.method);
+    if (qcmd.action === 'extend') return quoteExtend(actor, { no: qcmd.no }, qcmd.days);
+    return quoteCancel(actor, { no: qcmd.no });
+  }
+  if (['QUOTES', 'MY QUOTES', 'OPEN QUOTES', 'INVOICES'].includes(upper)) return quotesListReply(actor);
+  const payCmd = parsePayDetailsCommand(t);
+  if (payCmd) return payDetailsReply(actor, payCmd);
+  if (['FLYER', 'MAKE FLYER', 'FLYERS'].includes(upper)) return reply(actor.phone).text(...FLYER_HELP);
+  if (['MAKE LOGO', 'MAKE ME A LOGO', 'LOGO MAKER', 'NEW LOGO'].includes(upper) && !actor.isStaff) return logoColourPicker(actor.phone, null);
   const counted = parseCount(t);
   if (counted !== null) return cashCountReply(actor, counted);
   const split = await splitCommandReply(actor, t);
@@ -548,6 +562,8 @@ function helpMenu(actor: Actor): Reply {
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
+    '📄 Say "quote for Mama Tunde, 2 lace 50k each" for a branded quote · QUOTES · Q-014 PAID · MY ACCOUNT (bank details on quotes)',
+    '🖼️ FLYER — free "Available now" picture for your Status · MAKE LOGO — a free logo',
     '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 SUPPORT',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
   );
@@ -594,9 +610,22 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       if (actor.isStaff) return reply(actor.phone).text('Only the owner can change the logo.');
       const batch = b2 && b2 !== '-' ? b2 : null;
       if (a === 'ask') { await redis.set(AWAIT_LOGO_KEY(actor.phone), batch ?? '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
+      if (a === 'make') return logoColourPicker(actor.phone, batch);
       await useNameAsLogo(actor);
       return batch ? customerReceiptReply(actor, batch) : reply(actor.phone).text('✅ Done. Your business name is your logo on receipts.');
     }
+    case 'LOGOC': {
+      if (actor.isStaff) return reply(actor.phone).text('Only the owner can change the logo.');
+      const batch = b2 && b2 !== '-' ? b2 : null;
+      const made = await makeLogoReply(actor, Number(a) || 0);
+      if (!batch) return made;
+      await sendReplySafely(made, actor.phone);               // show the new logo, then carry on to the receipt they were waiting for
+      return customerReceiptReply(actor, batch);
+    }
+    case 'QPAID': return quotePaid(actor, { id: a }, null);
+    case 'QPM': return quotePaid(actor, { id: a }, (['cash', 'transfer', 'pos'] as const).find((m) => m === b2) ?? null);
+    case 'QEXT': return quoteExtend(actor, { id: a }, 3);
+    case 'QCAN': return quoteCancel(actor, { id: a });
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
     case 'BUYV1': case 'BUYV3': return actor.isStaff ? reply(actor.phone).text('Only the owner can buy video credits.') : startCreditPurchase(actor, kind);
@@ -682,6 +711,7 @@ async function runBrain(
         prefix: brain.transcript ? `🎙️ _"${brain.transcript.slice(0, 200)}"_\n` : undefined,
       });
     }
+    case 'CREATE_QUOTE': return brain.quote ? createQuote(actor, brain.quote) : reply(actor.phone).text('Tell me the customer, the items and prices, like: _quote for Mama Tunde: 2 lace 50k each and 1 gele 5k, valid 3 days_');
     case 'RECORD_DEBTS': return proposeDebts(actor, redis, brain.debts);
     case 'SET_PRODUCTS': return proposeProducts(actor, redis, brain.products);
     case 'UPDATE_CUSTOMER': return saveCustomerPhone(actor, brain.customer_update?.name ?? '', brain.customer_update?.phone ?? '');
@@ -816,6 +846,14 @@ export async function flushImageBatch(phone: string): Promise<void> {
   let r: Reply;
   // Photos + a caption with a name and a price = video details. Read deterministically: the AI router reads "Cord lace 17500" as
   // "update my product prices" (and, for a single photo, silently dropped the picture).
+  if (isFlyerCaption(caption)) {
+    const { ok } = await dailyCount(redis, `flyer:${phone}:${watDateKey()}`, FLYER_PER_DAY);
+    const pick = pickPalette(caption);
+    r = ok ? await flyerReply(actor, images[0]!.data, pick.caption, pick.palette)
+           : reply(phone).text(`You've made ${FLYER_PER_DAY} pictures today. Try again tomorrow.`);
+    await sendReplySafely(r, phone);
+    return;
+  }
   const quick = parseVideoCaption(caption);
   if (quick) {
     r = await askOrStartVideo(actor, images, quick.name, quick.price, quick.delivery ?? undefined, quick.voice);

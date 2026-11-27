@@ -28,10 +28,18 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
 /** Retry tuning (a test sets delayMs to 0). A busy or rate-limited speech model usually recovers within seconds. */
 export const ttsTuning = { rounds: 3, delayMs: 4000 };
 
+/** A model that said "limit reached for the DAY" is skipped for a while, so every video doesn't waste seconds retrying a dead model. */
+export const ttsCooldown = new Map<string, number>();
+const COOLDOWN_MS = 30 * 60_000;
+const isDailyCap = (e: unknown) => /free tier|per day|limit: 0\b/i.test(String((e as Error)?.message ?? e));
+
 async function geminiTts(text: string, yoruba = false): Promise<Voiceover> {
   // The preview model understood Yoruba better in listening checks, so it goes first for Yoruba and second otherwise.
-  const order = yoruba ? [env.GEMINI_TTS_FALLBACK_MODEL, env.GEMINI_TTS_MODEL] : [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL];
-  const models = order.filter((m, i, a) => m && a.indexOf(m) === i);
+  // The backup is a billed model with no daily cap: it carries the load once the two capped ones are used up.
+  const order = yoruba ? [env.GEMINI_TTS_FALLBACK_MODEL, env.GEMINI_TTS_MODEL, env.GEMINI_TTS_BACKUP_MODEL] : [env.GEMINI_TTS_MODEL, env.GEMINI_TTS_FALLBACK_MODEL, env.GEMINI_TTS_BACKUP_MODEL];
+  const all = order.filter((m, i, a) => m && a.indexOf(m) === i);
+  const live = all.filter((m) => (ttsCooldown.get(m) ?? 0) < Date.now());
+  const models = live.length ? live : all;                    // everything cooling down: try anyway rather than fail
   let lastErr: unknown;
   // Try every speech model, and if all are busy/out of quota, wait a moment and go round again: a silent ad is worse than a slow one.
   for (let round = 0; round < ttsTuning.rounds; round++) {
@@ -48,7 +56,10 @@ async function geminiTts(text: string, yoruba = false): Promise<Voiceover> {
         if (!part?.data) throw new Error('Gemini TTS returned no audio');
         const raw = Buffer.from(part.data, 'base64');
         return /wav/i.test(part.mimeType ?? '') ? { data: raw, ext: 'wav', mime: 'audio/wav' } : { data: pcmToWav(raw), ext: 'wav', mime: 'audio/wav' };
-      } catch (e) { lastErr = e; } // out of quota / overloaded → next model, then next round
+      } catch (e) {
+        lastErr = e; // out of quota / overloaded → next model, then next round
+        if (isDailyCap(e)) ttsCooldown.set(model, Date.now() + COOLDOWN_MS);
+      }
     }
   }
   void noteGeminiError('voice', lastErr);

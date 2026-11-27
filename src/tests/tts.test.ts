@@ -10,11 +10,11 @@ vi.hoisted(() => {
 const gen = vi.hoisted(() => vi.fn());
 vi.mock('@google/genai', () => ({ GoogleGenAI: class { models = { generateContent: gen }; } }));
 
-import { pcmToWav, synthesizeVoiceover, ttsTuning } from '../services/ttsService.js';
+import { pcmToWav, synthesizeVoiceover, ttsCooldown, ttsTuning } from '../services/ttsService.js';
 
 const pcm = Buffer.alloc(48_000).toString('base64'); // 1 s of 24 kHz 16-bit silence
 const audio = { candidates: [{ content: { parts: [{ inlineData: { data: pcm, mimeType: 'audio/L16;rate=24000' } }] } }] };
-beforeEach(() => { gen.mockReset(); ttsTuning.delayMs = 0; });
+beforeEach(() => { gen.mockReset(); ttsTuning.delayMs = 0; ttsCooldown.clear(); });
 
 describe('voiceover: only the ad is spoken', () => {
   it('sends exactly the words to speak: no instructions the voice could read out loud', async () => {
@@ -44,10 +44,27 @@ describe('voiceover: only the ad is spoken', () => {
     expect(r.ext).toBe('wav');
     expect(gen).toHaveBeenCalledTimes(3); // model A fail, model B fail, round 2 model A ok
   });
+  it('a model that hit its DAILY cap is skipped on the next video, so the billed backup answers at once', async () => {
+    const cap = new Error('Quota exceeded: generate content requests per day limit exceeded on Free Tier');
+    gen.mockRejectedValueOnce(cap).mockRejectedValueOnce(cap).mockResolvedValueOnce(audio);
+    await synthesizeVoiceover('One');                                   // capped, capped, backup answers
+    expect(gen.mock.calls[2]![0].model).toBe('gemini-2.5-flash-preview-tts');
+    gen.mockReset(); gen.mockResolvedValue(audio);
+    await synthesizeVoiceover('Two');
+    expect(gen).toHaveBeenCalledTimes(1);                               // went straight to the working model
+    expect(gen.mock.calls[0]![0].model).toBe('gemini-2.5-flash-preview-tts');
+  });
+  it('an ordinary busy error (429/503) is NOT treated as a daily cap: the model is tried again next time', async () => {
+    gen.mockRejectedValueOnce(new Error('503 high demand')).mockResolvedValueOnce(audio);
+    await synthesizeVoiceover('One');
+    gen.mockReset(); gen.mockResolvedValue(audio);
+    await synthesizeVoiceover('Two');
+    expect(gen.mock.calls[0]![0].model).toBe('gemini-3.8-flash-lite-tts');
+  });
   it('gives up (so the video falls back) only after every round has failed', async () => {
     gen.mockRejectedValue(new Error('429 quota'));
     await expect(synthesizeVoiceover('Hello shop')).rejects.toThrow('429');
-    expect(gen).toHaveBeenCalledTimes(ttsTuning.rounds * 2);
+    expect(gen).toHaveBeenCalledTimes(ttsTuning.rounds * 3);
   });
   it('wraps raw PCM in a valid WAV header', () => {
     const w = pcmToWav(Buffer.alloc(100));

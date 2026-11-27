@@ -45,6 +45,8 @@ export interface Business {
   referral_apply_to_renewal?: boolean;
   /** Evening profit split "restock/reserve/pay", e.g. 50/20/30. NULL = default. Needs migration 010. */
   setaside_split?: string | null;
+  /** "GTBank 0123456789 Ada Fabrics": printed on quotes. Needs migration 011. */
+  pay_details?: string | null;
   total_value_recovered_ngn: number;
   google_sheet_id: string | null;
   created_at: string;

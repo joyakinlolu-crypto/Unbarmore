@@ -378,12 +378,12 @@ describe('receipt: never assume several sales are one person', () => {
 });
 
 describe('receipt: logo', () => {
-  it('first receipt asks once: send a logo, or use the business name', async () => {
+  it('first receipt asks once: send a logo, let me make one, or use the business name', async () => {
     m.getBatchRows.mockResolvedValueOnce([row({ status: 'confirmed' })]);
     const r = await customerReceiptReply(actor({ logo_url: null }), 'batch1');
     expect(body(r)).toContain('Do you have a logo');
-    expect(body(r)).toContain('use your business name as your logo');
-    expect((r.toPayload() as any).interactive.action.buttons.map((b: any) => b.reply.id)).toEqual(['LOGO:ask:batch1', 'LOGO:name:batch1']);
+    expect(body(r)).toContain('design a clean one for you');
+    expect((r.toPayload() as any).interactive.action.buttons.map((b: any) => b.reply.id)).toEqual(['LOGO:ask:batch1', 'LOGO:make:batch1', 'LOGO:name:batch1']);
     expect(m.uploadFile).not.toHaveBeenCalled();
   });
   it('after choosing "use my name" (logo_url = none) the receipt is produced straight away', async () => {

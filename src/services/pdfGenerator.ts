@@ -164,6 +164,70 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
   }, 'A5');
 }
 
+// ───────────── Quote / invoice (A5) ─────────────
+
+export interface QuoteInput {
+  businessName: string; rcNumber: string | null; logo?: Buffer | null;
+  quoteLabel: string; dateWat: string; customerName: string | null;
+  lines: { item: string; qty: number; unit: number; amount: number }[];
+  deliveryFee: number; total: number;
+  /** "Thu 4 Dec". Omitted on plans without a validity window. */
+  validUntilLabel?: string | null;
+  payDetails?: string | null;
+  note?: string | null;
+  /** Set unless the plan has no watermark. */
+  promo?: Promo | null;
+}
+
+export function quotePdf(q: QuoteInput): Promise<Buffer> {
+  return render((doc) => {
+    header(doc, `QUOTATION\n${q.quoteLabel}`, q.businessName, q.rcNumber, q.logo);
+    const x = doc.page.margins.left;
+    const w = doc.page.width - x - doc.page.margins.right;
+
+    doc.font('reg').fontSize(9).fillColor(BRAND.muted);
+    doc.text(`Date: ${q.dateWat}`);
+    doc.text(`Prepared for: ${q.customerName ?? 'Valued customer'}`);
+    if (q.validUntilLabel) { doc.font('bold').fillColor(BRAND.red).text(`Price valid until: ${q.validUntilLabel}`); }
+    doc.moveDown();
+
+    const cols = [x, x + w * 0.5, x + w * 0.62, x + w * 0.8];
+    const row = (cells: string[], font: 'reg' | 'bold', color = BRAND.ink) => {
+      const y = doc.y;
+      doc.font(font).fontSize(9).fillColor(color);
+      doc.text(cells[0]!, cols[0], y, { width: w * 0.48 });
+      const h = doc.y - y;
+      doc.text(cells[1]!, cols[1], y, { width: w * 0.1, align: 'right' });
+      doc.text(cells[2]!, cols[2], y, { width: w * 0.16, align: 'right' });
+      doc.text(cells[3]!, cols[3], y, { width: w * 0.2, align: 'right' });
+      doc.y = y + Math.max(h, 12) + 4;
+      doc.x = x;
+    };
+    row(['Item', 'Qty', 'Unit', 'Amount'], 'bold', BRAND.muted);
+    for (const l of q.lines) row([l.item, String(l.qty), ngn(l.unit), ngn(l.amount)], 'reg');
+    if (q.deliveryFee > 0) row(['Delivery', '1', ngn(q.deliveryFee), ngn(q.deliveryFee)], 'reg');
+
+    doc.moveTo(x, doc.y).lineTo(x + w, doc.y).strokeColor(BRAND.line).stroke();
+    doc.moveDown(0.5);
+    const y = doc.y;
+    doc.font('bold').fontSize(12).fillColor(BRAND.ink);
+    doc.text('TOTAL TO PAY', x + w * 0.3, y, { width: w * 0.4, align: 'right' });
+    doc.text(ngn(q.total), x + w * 0.7, y, { width: w * 0.3, align: 'right' });
+    doc.x = x; doc.moveDown(1);
+
+    if (q.payDetails) {
+      const boxY = doc.y;
+      doc.roundedRect(x, boxY, w, 40, 6).fillColor('#ECFDF3').fill();
+      doc.font('bold').fontSize(8).fillColor(BRAND.green).text('PAY TO', x + 8, boxY + 6, { width: w - 16 });
+      doc.font('bold').fontSize(10).fillColor(BRAND.ink).text(q.payDetails, x + 8, boxY + 18, { width: w - 16, lineBreak: false });
+      doc.y = boxY + 50; doc.x = x;
+    }
+    if (q.note) doc.font('reg').fontSize(8).fillColor(BRAND.muted).text(q.note, x, doc.y, { width: w });
+    doc.font('reg').fontSize(9).fillColor(BRAND.muted).text('Thank you for your business.', x, doc.y + 6, { width: w, align: 'center' });
+    footer(doc, q.promo);
+  }, 'A5');
+}
+
 // ───────────── Weekly statement (A4) ─────────────
 
 export interface StatementInput {

@@ -1,3 +1,4 @@
+import { PLANS } from '../config/plans.js';
 import { db, ledgerSummary, type Business } from '../db/supabase.js';
 import { ngn, watDateKey } from '../lib/money.js';
 import { profitLabel, profitPhrase, profitView } from '../lib/profit.js';
@@ -5,6 +6,7 @@ import { clientStats, lapsed } from './clients.js';
 import { periodRange } from './insights.js';
 import { firstName, reminderText } from '../lib/debtReminders.js';
 import { waLink } from '../lib/waLink.js';
+import { quotesDue, type QuoteDue } from './quotesDue.js';
 import { runOutFocus, runOutLine, runOutRisk, WINDOW_DAYS, type RunOut } from '../lib/runOut.js';
 
 /**
@@ -18,6 +20,8 @@ export interface MorningFacts {
   debts: DueDebt[];
   quiet: { name: string; days: number; spent: number }[];
   lowStock: { name: string; left: number }[];
+  /** Open quotes that expire tomorrow/today or expired yesterday (Starter+ only: free quotes have no expiry). */
+  quotes?: QuoteDue[];
   /** Items that will sell out within days at their real selling speed (see lib/runOut.ts). Preferred over the flat lowStock line. */
   runningOut?: RunOut[];
   isMonday: boolean;
@@ -66,14 +70,24 @@ function debtLine(d: DueDebt): string {
   return `• ${d.name} owes you ${ngn(d.amount)}: due in ${plural(-d.late, 'day')}`;
 }
 
+const whoFor = (q: QuoteDue) => `${q.label}${q.customer ? ` (${q.customer}, ${ngn(q.total)})` : ` (${ngn(q.total)})`}`;
+const quoteWhen = (left: number) => (left < 0 ? 'expired yesterday' : left === 0 ? 'expires today' : 'expires tomorrow');
+function quoteLine(q: QuoteDue): string { return `• Quote ${whoFor(q)} ${quoteWhen(q.left)}`; }
+function quoteFocus(q: QuoteDue): string {
+  return q.left < 0
+    ? `👉 *Quote ${q.label} has expired.* Did they pay? Say *${q.label} PAID*, or give more time: *${q.label} EXTEND 3*.`
+    : `👉 *Ask ${q.customer ?? 'the customer'} to pay ${q.label} ${q.left === 0 ? 'today' : 'before it expires tomorrow'}.* Or say *${q.label} EXTEND 3* to hold the price longer.`;
+}
+
 /** Pure: facts in, message out. Priority of the single "start with" line: overdue/today debts > upcoming > quiet customers > low stock > log yesterday. */
 export function composeMorning(f: MorningFacts): MorningMessage {
-  const debts = f.debts.slice(0, 3), quiet = f.quiet.slice(0, 1), ro = f.runningOut?.[0], low = ro ? [] : f.lowStock.slice(0, 1);
+  const quotes = (f.quotes ?? []).slice(0, 2), debts = f.debts.slice(0, 3), quiet = f.quiet.slice(0, 1), ro = f.runningOut?.[0], low = ro ? [] : f.lowStock.slice(0, 1);
   const lines: string[] = [`☀️ *Good morning, ${f.businessName}!*`];
   lines.push(f.yesterday && f.yesterday.count > 0 ? `Yesterday: ${f.yesterday.line}` : 'Nothing was recorded yesterday.');
 
   const items = [
     ...debts.map(debtLine),
+    ...quotes.map(quoteLine),
     ...quiet.map((c) => `• ${c.name} hasn't bought in ${plural(c.days, 'day')} (spent ${ngn(c.spent)})`),
     ...(ro ? [`• ${runOutLine(ro)}`] : []),
     ...low.map((p) => `• ${p.name}: only ${p.left} left`),
@@ -86,6 +100,7 @@ export function composeMorning(f: MorningFacts): MorningMessage {
   if (urgent) focus = `👉 *Start with ${urgent.name}: ${ngn(urgent.amount)}.* A kind message this morning beats chasing later.`;
   else if (debts[0] && debts[0].late === null) focus = `👉 *Start with ${debts[0].name}:* ${ngn(debts[0].amount)} is still waiting. A friendly nudge today.`;
   else if (upcoming) focus = `👉 Get ready: ${upcoming.name}'s ${ngn(upcoming.amount)} is due soon. Remind them early.`;
+  else if (quotes[0]) focus = quoteFocus(quotes[0]);
   else if (quiet[0]) focus = `👉 *Message ${quiet[0].name} today.* A past customer is the cheapest sale you can make.`;
   else if (ro) focus = runOutFocus(ro);
   else if (low[0]) focus = `👉 Restock *${low[0].name}* before you miss a sale.`;
@@ -152,6 +167,7 @@ export async function gatherMorning(biz: Business): Promise<MorningFacts> {
     quiet: lapsed(clients).slice(0, 2).map((c) => ({ name: c.name, days: Math.floor((Date.now() - new Date(c.lastBuy!).getTime()) / DAY), spent: c.spent })),
     lowStock: (prods.data ?? []).map((p) => ({ name: p.name as string, left: Math.max(0, Number(p.stock_qty)) })),
     runningOut: await runningOutFor(biz.id).catch(() => []),
+    quotes: PLANS[biz.subscription_tier].quoteExpiry ? await quotesDue(biz.id).catch(() => []) : [],
     isMonday: new Date(Date.now() + 3600_000).getUTCDay() === 1,
     appNudge: appNudgeFor(biz.created_at, await appUsage(biz.id).catch(() => 'alerts' as const), 'morning'),
   };

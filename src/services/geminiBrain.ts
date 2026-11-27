@@ -52,7 +52,7 @@ export const NOT_SUPPORTED_KINDS = ['I_OWE_SUPPLIER', 'OPENING_CASH', 'BANK_BALA
 export const BrainSchema = z.object({
   intent: z.enum([
     'LOG_TRANSACTION', 'RECORD_DEBTS', 'SET_PRODUCTS', 'UPDATE_CUSTOMER', 'RECORD_CLIENTS', 'CUSTOMER_OUTREACH', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT',
-    'QUERY_BUSINESS', 'CHASE_DEBTS', 'UNDO_LAST', 'CORRECT_LAST', 'NOT_SUPPORTED', 'BUSINESS_ADVICE', 'ACKNOWLEDGE', 'HELP', 'OFF_TOPIC',
+    'QUERY_BUSINESS', 'CHASE_DEBTS', 'CREATE_QUOTE', 'UNDO_LAST', 'CORRECT_LAST', 'NOT_SUPPORTED', 'BUSINESS_ADVICE', 'ACKNOWLEDGE', 'HELP', 'OFF_TOPIC',
   ]),
   language: z.enum(['english', 'pidgin', 'yoruba', 'hausa', 'igbo']).describe('Language the user spoke/wrote in. Reply in the same register.'),
   transcript: z.string().optional().describe('Verbatim transcript if input was a voice note.'),
@@ -81,6 +81,13 @@ export const BrainSchema = z.object({
       scripts: z.array(z.string()).describe('Exactly 2 ready-to-paste WhatsApp replies, max 60 words each.'),
     })
     .optional(),
+  quote: z.object({
+    customer_name: z.string().optional(),
+    lines: z.array(z.object({ item_name: z.string(), quantity: z.number().positive(), unit_price_ngn: Naira })).min(1),
+    valid_days: z.number().int().min(1).max(90).optional().describe('How many days the price is held, only if the owner said ("valid 3 days", "for one week" = 7).'),
+    delivery_fee_ngn: Naira.optional(),
+    note: z.string().max(160).optional(),
+  }).optional().describe('CREATE_QUOTE: the items of the quote/invoice.'),
   video_request: z
     .object({ product_name: z.string().optional(), price_ngn: Naira.optional(), delivery_info: z.string().optional() })
     .optional(),
@@ -225,10 +232,11 @@ Classify the message into exactly one intent and fill ONLY that intent's field:
   Write 2 warm, confident Nigerian closing replies: one value-anchoring, one urgency/scarcity or bundle. Never insult. Never discount more than 10% unless the user said so.
 - CREATE_VIDEO_SCRIPT → "video_request". User wants an ad/video/promo for a product. Extract any name, price, delivery info.
 - QUERY_BUSINESS → "query". QUESTIONS about their own recorded numbers: profit, who owes (all, or one named customer via customer_name), best sellers, best customers, slow stock, expenses, stock left, cash today, "my customers / my client list" (kind customers), "who has stopped buying / my inactive customers" (kind lapsed_customers). A question has a question form ("who owes me?", "how much does Femi owe?"); a statement of debts is RECORD_DEBTS.
+- CREATE_QUOTE → "quote". The owner asks you to make a QUOTE, INVOICE or PROFORMA for a customer: "make an invoice for Mama Tunde, 2 lace at 50k each and 1 gele 5k", "send Ada a quote for 3 bags of rice 45k each, valid for 3 days, delivery 2k". lines = one entry per item with the quantity and the price of ONE unit (if only a line total is given, divide it by the quantity). valid_days only if they say how long the price holds. This is NOT a sale: nothing is recorded until the customer pays. A sale that already HAPPENED ("sold 2 lace 50k") is LOG_TRANSACTION, never CREATE_QUOTE. A request for a receipt for a past sale is not a quote.
 - CHASE_DEBTS → no field. They want reminder messages for people who OWE THEM money ("remind everyone owing me", "chase my debtors"). Messaging all customers in general ("message all my customers", promotions, broadcasts) is NOT_SUPPORTED with not_supported=OTHER, never CHASE_DEBTS.
 - UNDO_LAST → no field. They want the last entry removed ("delete the last entry", "cancel that").
 - CORRECT_LAST → no field. They say the last entry had a wrong amount or detail ("that last one was 25k not 35k").
-- NOT_SUPPORTED → "not_supported": I_OWE_SUPPLIER (ONLY a bare statement that the owner owes a supplier, with no goods bought now; if they describe buying goods with a quantity or price, even part-paid, it is LOG_TRANSACTION restock with the amount actually paid), OPENING_CASH, BANK_BALANCE (their bank/cash balance), PERSONAL_SPENDING (owner took money for personal/household use), INVOICE (asks you to send an invoice), OTHER (a business request you cannot do).
+- NOT_SUPPORTED → "not_supported": I_OWE_SUPPLIER (ONLY a bare statement that the owner owes a supplier, with no goods bought now; if they describe buying goods with a quantity or price, even part-paid, it is LOG_TRANSACTION restock with the amount actually paid), OPENING_CASH, BANK_BALANCE (their bank/cash balance), PERSONAL_SPENDING (owner took money for personal/household use), INVOICE (only an invoice for something other than goods, which you cannot make), OTHER (a business request you cannot do).
 - BUSINESS_ADVICE → practical questions about running or growing THEIR business that are not about their own recorded numbers: pricing, marketing, getting and keeping customers, handling debtors or suppliers, stock, cash flow, hiring, record keeping, how to use Unbarmore.
   reply_text: a direct, practical answer in the user's language and register, max 90 words, Nigerian market context, ending with one concrete next step. Use plain text (no markdown headings). Never invent their numbers: if they want their own figures that is QUERY_BUSINESS.
 - ACKNOWLEDGE → "thank you", "ok", "👍", "alright", "noted" with nothing else.

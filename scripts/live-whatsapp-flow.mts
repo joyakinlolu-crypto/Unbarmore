@@ -216,7 +216,7 @@ try {
   ok('selling an item with no cost price → asks ONCE what it costs ("What does Lace cost you? Say lace costs me 15k…") so profit can be real', /What does \*?Lace\*? cost you\?/i.test(r.reply?.text ?? '') && /costs me 15k/.test(r.reply?.text ?? ''), (r.reply?.text ?? '').replace(/\n/g, ' | ').slice(-200));
   ok('first confirmed entry also cheers and points to the next step ("🎉 First entry saved! Next: tell me who owes you")', /First entry saved/.test(r.reply?.text ?? ''));
   const lq = await ask('receipt-logo-q', () => button(rcptId), (v) => /Do you have a logo/.test(v.text));
-  ok('the FIRST receipt asks once: "Do you have a logo?" with [Send my logo] / [Use my name], and makes no PDF yet', !!lq.reply && lq.reply.kind !== 'document' && lq.reply.buttons.map((b) => b.id.split(':').slice(0, 2).join(':')).join() === 'LOGO:ask,LOGO:name', lq.reply?.text.replace(/\n/g, ' | '));
+  ok('the FIRST receipt asks once: "Do you have a logo?" with [Send my logo] / [Make me one] / [Use my name], and makes no PDF yet', !!lq.reply && lq.reply.kind !== 'document' && lq.reply.buttons.map((b) => b.id.split(':').slice(0, 2).join(':')).join() === 'LOGO:ask,LOGO:make,LOGO:name', lq.reply?.text.replace(/\n/g, ' | '));
   const nameBtn = lq.reply?.buttons.find((b) => b.id.startsWith('LOGO:name:'))?.id ?? '';
   const rc = await ask('receipt-button', () => button(nameBtn), (v) => v.kind === 'document');
   const cap = rc.reply?.text ?? '';
@@ -365,6 +365,59 @@ try {
   const t3 = Date.now(); while (Date.now() - t3 < 30_000 && sent.length === b3) await sleep(300);
   const other = sent.slice(b3).map(view);
   ok('ADMIN from any other number gets NOTHING (treated as an ordinary first message)', other.length >= 1 && !other.some((v) => /live stats|Est\. MRR|Businesses:/.test(v.text)), other[0]?.text.slice(0, 80));
+
+  // ───── 12d. quotes, free flyer, free logo (quotes need migration 011) ─────
+  const b011 = Array.isArray(await (await rest('quotes?select=id&limit=1')).json());
+  if (!b011) console.log('⏭️  quote tests skipped: run supabase/migrations/011_quotes_and_pay_details.sql in Supabase, then re-run');
+  else {
+    r = await ask('quote', () => text('make a quote for Mama Tunde: 2 lace at 50k each and 1 gele 5k, delivery 2k, valid for 5 days'), (v) => v.kind === 'interactive' && v.buttons.some((b) => b.id.startsWith('QPAID:')), 90_000);
+    const qt = r.reply?.text ?? '';
+    ok('"make a quote for Mama Tunde…" → ONE message: a PDF + the lines + ₦107,000 + held-until date + Mark paid / Extend / Cancel', !!r.reply && real(r.all).length === 1 && r.reply.header?.type === 'document' && /Q-001/.test(qt) && /Mama Tunde/.test(qt) && /107,000/.test(qt) && /Price held until/.test(qt) && r.reply.buttons.map((b) => b.id.split(':')[0]).join() === 'QPAID,QEXT,QCAN', qt.replace(/\n/g, ' | ').slice(0, 240));
+    if (r.reply?.header?.link) {
+      const pdf = Buffer.from(await (await fetch(r.reply.header.link)).arrayBuffer());
+      ok('the quote link downloads a real PDF', pdf.subarray(0, 4).toString() === '%PDF' && pdf.length > 2500, `${pdf.length} bytes`);
+    }
+    const q1 = (await rows(`quotes?business_id=eq.${biz!.id}&select=quote_no,total_ngn,valid_until,status,customer_name`))[0];
+    ok('database: quote 1 is open, ₦107,000, for Mama Tunde, with a validity date', Number(q1?.quote_no) === 1 && Number(q1?.total_ngn) === 107000 && q1?.status === 'open' && !!q1?.valid_until && /Tunde/.test(q1?.customer_name ?? ''), JSON.stringify(q1));
+    const salesBefore = (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length;
+    ok('a quote is NOT a sale: nothing was added to the books', (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&description=like.*Lace*&select=id`)).every((x: any) => x.id !== undefined) && salesBefore >= 0);
+
+    r = await ask('account', () => text('MY ACCOUNT GTBank 0123456789 Ada Fabrics'), (v) => /Pay to/.test(v.text));
+    ok('MY ACCOUNT GTBank 0123456789 Ada Fabrics → saved, shown on every new quote', !!r.reply && (await rows(`businesses?id=eq.${biz!.id}&select=pay_details`))[0]?.pay_details === 'GTBank 0123456789 Ada Fabrics');
+    r = await ask('quotes', () => text('QUOTES'), (v) => /Open quotes/.test(v.text));
+    ok('QUOTES lists Q-001 with the total waiting and the days left', !!r.reply && /Q-001/.test(r.reply.text) && /107,000/.test(r.reply.text) && /days left/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+    r = await ask('extend', () => text('Q-001 EXTEND 7'), (v) => v.header?.type === 'document' && /extended/i.test(v.text));
+    ok('"Q-001 EXTEND 7" → a NEW PDF to forward, with the later date', !!r.reply && /Q-001 extended to/.test(r.reply.text));
+    r = await ask('paid-ask', () => text('Q-001 PAID'), (v) => v.buttons.some((b) => b.id.startsWith('QPM:')));
+    ok('"Q-001 PAID" → asks HOW they paid (transfer / cash / POS) before recording anything', !!r.reply && r.reply.buttons.length === 3 && (await rows(`quotes?business_id=eq.${biz!.id}&select=status`))[0]?.status === 'open');
+    r = await ask('paid-cash', () => button(r.reply!.buttons.find((b) => b.id.endsWith(':cash'))!.id), (v) => /marked paid/.test(v.text));
+    ok('tap Cash → sale recorded (₦107,000 incl. delivery), profit line shown, "Q-001 marked paid (cash)", ONE message', !!r.reply && /Saved/.test(r.reply.text) && /Q-001 marked paid \(cash\)/.test(r.reply.text) && real(r.all).length === 1, r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+    const saleRows = await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&payment_method=eq.cash&description=in.(*Lace*,*Gele*,Delivery)&select=description,total_ngn:total_amount_ngn,amount_paid_ngn`);
+    ok('database: the quote became sale lines (Lace ₦100,000, Gele ₦5,000, Delivery ₦2,000), fully paid in cash, and the quote is closed', saleRows.length >= 3 && (await rows(`quotes?business_id=eq.${biz!.id}&select=status,paid_method`))[0]?.status === 'paid', JSON.stringify(saleRows).slice(0, 200));
+    const sBefore = (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length;
+    r = await ask('paid-twice', () => text('Q-001 PAID cash'), (v) => /already marked paid/.test(v.text));
+    ok('saying PAID a second time records nothing more', !!r.reply && (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length === sBefore);
+
+    // free flyer: one product photo with a caption → an image back, no AI call, no cost
+    const flyPhoto = path.join(tmp, 'fly.jpg');
+    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=640x800:rate=1', '-frames:v', '1', flyPhoto]);
+    media.set('FLY1', { data: fs.readFileSync(flyPhoto), mime: 'image/jpeg' });
+    r = await ask('flyer', () => webhook({ type: 'image', image: { id: 'FLY1', mime_type: 'image/jpeg', caption: 'flyer Ankara gown 15k' } }), (v) => v.header?.type === 'image', 60_000);
+    ok('photo + caption "flyer Ankara gown 15k" → ONE image message (a finished "Available now" picture)', !!r.reply && real(r.all).length === 1 && /ready/i.test(r.reply.text));
+    if (r.reply?.header?.link) {
+      const png = Buffer.from(await (await fetch(r.reply.header.link)).arrayBuffer());
+      ok('the flyer is a real 1080×1920 PNG', png.subarray(1, 4).toString() === 'PNG' && png.readUInt32BE(16) === 1080 && png.readUInt32BE(20) === 1920, `${png.length} bytes`);
+    }
+    r = await ask('flyer-help', () => text('FLYER'), (v) => /Available now/i.test(v.text));
+    ok('FLYER → explains how, in one message', !!r.reply && /flyer Ankara gown 15k/.test(r.reply.text));
+
+    // free logo maker
+    r = await ask('make-logo', () => text('MAKE LOGO'), (v) => v.buttons.some((b) => b.id.startsWith('LOGOC:')));
+    ok('MAKE LOGO → 3 colour buttons', !!r.reply && r.reply.buttons.length === 3);
+    r = await ask('logo-colour', () => button(r.reply!.buttons[1]!.id), (v) => v.header?.type === 'image');
+    const lg = (await rows(`businesses?id=eq.${biz!.id}&select=logo_url`))[0]?.logo_url;
+    ok('pick a colour → the logo image comes back AND is saved as the shop logo', !!r.reply && /Your logo is ready/.test(r.reply.text) && typeof lg === 'string' && lg.endsWith('logo.png'), lg);
+  }
 
   // ───── 12e. referral wallet: ₦1,000 cash-out minimum (needs migrations 003 + 009 on the database) ─────
   const payoutsReady = Array.isArray(await (await rest('payout_requests?select=ref&limit=1')).json());
