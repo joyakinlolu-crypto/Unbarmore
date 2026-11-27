@@ -112,3 +112,61 @@ describe('Azure as the safety net when every Gemini speech model is capped', () 
     await expect(mod.synthesizeVoiceover('Hello shop')).rejects.toThrow('Free Tier');
   });
 });
+
+describe('Google Cloud Text-to-Speech (the path around the Gemini API\'s 10-a-day cap)', () => {
+  const sa = { client_email: 'tts@proj.iam.gserviceaccount.com', private_key: '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----\\n', project_id: 'proj' };
+  const synth = vi.fn();
+  const setup = async (creds: string | undefined, geminiResult: 'ok' | 'fail' = 'fail') => {
+    vi.resetModules(); synth.mockReset();
+    if (creds === undefined) delete process.env.GOOGLE_TTS_CREDENTIALS_JSON; else process.env.GOOGLE_TTS_CREDENTIALS_JSON = creds;
+    const g = geminiResult === 'ok' ? vi.fn().mockResolvedValue(audio) : vi.fn().mockRejectedValue(new Error('Quota exceeded: Free Tier per day'));
+    vi.doMock('@google/genai', () => ({ GoogleGenAI: class { models = { generateContent: g }; } }));
+    vi.doMock('@google-cloud/text-to-speech', () => ({ TextToSpeechClient: class { constructor(public opts: unknown) {} synthesizeSpeech = synth; } }));
+    vi.doMock('../lib/alerts.js', () => ({ noteGeminiError: vi.fn(), alertAdmin: vi.fn() }));
+    const mod = await import('../services/ttsService.js'); mod.ttsTuning.delayMs = 0; mod.ttsTuning.rounds = 1;
+    return { mod, g };
+  };
+
+  it('credentials: raw JSON or base64 are accepted, \\n in the key is repaired, junk is ignored', async () => {
+    const { mod } = await setup(undefined);
+    expect(mod.parseCloudCredentials(JSON.stringify(sa))?.client_email).toBe(sa.client_email);
+    expect(mod.parseCloudCredentials(Buffer.from(JSON.stringify(sa)).toString('base64'))?.project_id).toBe('proj');
+    expect(mod.parseCloudCredentials(JSON.stringify(sa))?.private_key).toContain('\n');
+    for (const bad of [undefined, '', '   ', 'not json', '{"a":1}', Buffer.from('{"x":1}').toString('base64')]) expect(mod.parseCloudCredentials(bad)).toBeNull();
+  });
+  it('with credentials, Cloud TTS answers FIRST using the Gemini voice model, and the Gemini API is never called', async () => {
+    const { mod, g } = await setup(JSON.stringify(sa), 'ok');
+    synth.mockResolvedValue([{ audioContent: Buffer.from('ID3mp3bytes') }]);
+    const r = await mod.synthesizeVoiceover('Order now on WhatsApp');
+    expect(r.ext).toBe('mp3'); expect(r.mime).toBe('audio/mpeg'); expect(g).not.toHaveBeenCalled();
+    expect(synth.mock.calls[0]![0]).toMatchObject({ input: { text: 'Order now on WhatsApp' }, voice: { languageCode: 'en-US', name: 'Kore', modelName: 'gemini-2.5-flash-tts' } });
+  });
+  it('Yoruba asks Cloud for the Yoruba language code', async () => {
+    const { mod } = await setup(JSON.stringify(sa));
+    synth.mockResolvedValue([{ audioContent: Buffer.from('ID3') }]);
+    await mod.synthesizeVoiceover('Ẹ káàbọ̀', { yoruba: true });
+    expect(synth.mock.calls[0]![0].voice.languageCode).toBe('yo-NG');
+  });
+  it('if Cloud fails (e.g. the language is not supported) the Gemini API voice is tried next, so a video still gets a voice', async () => {
+    const { mod, g } = await setup(JSON.stringify(sa), 'ok');
+    synth.mockRejectedValue(new Error('3 INVALID_ARGUMENT: language yo-NG is not supported'));
+    const r = await mod.synthesizeVoiceover('Bawo ni', { yoruba: true });
+    expect(r.ext).toBe('wav'); expect(g).toHaveBeenCalled();
+  });
+  it('Cloud rate-limited → the next few seconds go to the others instead of hammering it', async () => {
+    const { mod, g } = await setup(JSON.stringify(sa), 'ok');
+    synth.mockRejectedValue(new Error('8 RESOURCE_EXHAUSTED: quota'));
+    await mod.synthesizeVoiceover('One'); await mod.synthesizeVoiceover('Two');
+    expect(synth).toHaveBeenCalledTimes(1);                             // the second video skipped Cloud during the cool-off
+    expect(g).toHaveBeenCalledTimes(2);
+  });
+  it('without credentials nothing changes: Cloud is never touched', async () => {
+    const { mod, g } = await setup(undefined, 'ok');
+    await mod.synthesizeVoiceover('Hello'); expect(synth).not.toHaveBeenCalled(); expect(g).toHaveBeenCalled();
+  });
+  it('an unreadable credential is treated as "not configured" (no crash)', async () => {
+    const { mod, g } = await setup('garbage', 'ok');
+    await mod.synthesizeVoiceover('Hello'); expect(synth).not.toHaveBeenCalled(); expect(g).toHaveBeenCalled();
+    delete process.env.GOOGLE_TTS_CREDENTIALS_JSON;
+  });
+});

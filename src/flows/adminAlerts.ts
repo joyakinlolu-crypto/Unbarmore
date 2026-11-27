@@ -3,6 +3,8 @@ import { reply, type Reply } from '../services/whatsapp.js';
 import { addVideoCredits, db, isInServiceWindow } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
 import { scorecardReply } from './scorecard.js';
+import { signedUrl, uploadFile } from '../db/supabase.js';
+import { synthesizeVoiceover } from '../services/ttsService.js';
 
 const wat = (t: number) => new Date(t + 3600_000).toISOString().slice(5, 16).replace('T', ' ');
 
@@ -29,6 +31,8 @@ export async function adminAlertCommand(phone: string, text: string): Promise<Re
       return reply(phone).text(`Could not add credits: ${String((e as Error)?.message ?? e).slice(0, 120)} (has migration 008 been run?)`);
     }
   }
+  const tv = t.match(/^test voice(?:\s+(yoruba|pidgin|english))?$/i);
+  if (tv) return testVoiceReply(phone, (tv[1] ?? 'english').toLowerCase());
   const sc = t.match(/^(?:score ?card|pilot)(?:\s+(\d{1,2}))?$/i);
   if (sc) return scorecardReply(phone, sc[1] ? Number(sc[1]) : 7);
   if (/^costs?$/i.test(t)) return costsReply(phone);
@@ -88,4 +92,24 @@ async function costsReply(phone: string): Promise<Reply> {
     `By kind: ${[...byKind.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => `${k.replace('_', ' ')} ${ngn(Math.round(c))}`).join(' · ')}`,
     '_Estimates from token counts; check Google AI Studio → Spend for the real number._',
   );
+}
+
+const VOICE_LINES: Record<string, string> = {
+  english: 'Fresh Ankara gown, fifteen thousand naira. Message us on WhatsApp to order today.',
+  pidgin: 'Oga, this Ankara gown sweet die! Na fifteen thousand naira only. Message us on WhatsApp make you order today.',
+  yoruba: 'Aṣọ Ankara tuntun wà. Ẹ kọ̀wé sí wa lórí WhatsApp láti paṣẹ lónìí.',
+};
+
+/** Admin: TEST VOICE [yoruba|pidgin]. Makes a short voiceover through the real pipeline, says which service answered, and sends it so you can listen. */
+export async function testVoiceReply(phone: string, lang: string): Promise<Reply> {
+  const t0 = Date.now();
+  try {
+    const v = await synthesizeVoiceover(VOICE_LINES[lang] ?? VOICE_LINES.english!, { pidgin: lang === 'pidgin', yoruba: lang === 'yoruba' });
+    const path = await uploadFile('videos', `admin-tests/voice-${Date.now()}.${v.ext}`, v.data, v.mime);
+    const who = { cloud: 'Google Cloud Text-to-Speech', gemini: 'Gemini API speech (the capped one)', azure: 'Azure', google: 'Google TTS' }[v.provider ?? 'gemini'];
+    return reply(phone).document(await signedUrl('videos', path), `voice-test-${lang}.${v.ext}`)
+      .text(`🔊 *Voice test (${lang}) worked* via *${who}* in ${((Date.now() - t0) / 1000).toFixed(1)}s.`, 'Open the file and listen: does it sound right?');
+  } catch (e) {
+    return reply(phone).text(`🔇 *Voice test (${lang}) FAILED* after ${((Date.now() - t0) / 1000).toFixed(1)}s:`, String((e as Error)?.message ?? e).replace(/\s+/g, ' ').slice(0, 300), '', 'Videos made now will have music only. Check GOOGLE_TTS_CREDENTIALS_JSON / AZURE_SPEECH_KEY.');
+  }
 }
