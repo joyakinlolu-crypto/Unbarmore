@@ -72,7 +72,7 @@ describe('CLOSE — end-of-day maths', () => {
     expect(t).toContain('New credit given today: ₦20,000');
     expect(t).toContain('no payment method');
     expect(t).toContain('2 entries are still waiting');
-    expect(t).toContain('PLUS the cash you opened with');
+    expect(t).toContain('COUNT 85000');
   });
   it('an empty day is all zeros, no crash', () => { expect(summariseDay([]).expectedCash).toBe(0); });
 });

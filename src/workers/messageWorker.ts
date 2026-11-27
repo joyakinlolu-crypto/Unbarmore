@@ -27,6 +27,8 @@ import { linkReferrer, lookupReferrer, REF_CODE_RE } from '../flows/referral.js'
 import { parseChaseCommand, parsePromise } from '../lib/debtReminders.js';
 import { recordPromise } from '../flows/promises.js';
 import { occurredAt } from '../lib/sentAt.js';
+import { cashCountReply, splitCommandReply } from '../flows/cashCount.js';
+import { parseCount } from '../lib/cashCount.js';
 import { remakeLastVideo, startVideo } from '../flows/video.js';
 import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.js';
 import { createOwnerMagicLink } from '../services/webLink.js';
@@ -447,6 +449,10 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     await setReminders(b.id, true);
     return reply(actor.phone).text('✅ Back on. You\'ll hear from me at 7 AM (who to follow up) and 9 PM (how your day went).');
   }
+  const counted = parseCount(t);
+  if (counted !== null) return cashCountReply(actor, counted);
+  const split = await splitCommandReply(actor, t);
+  if (split) return split;
   const chase = parseChaseCommand(t);
   if (chase) return chaseDebtsReply(actor, chase.lang);
   const promise = parsePromise(t, watDateKey());
@@ -542,7 +548,7 @@ function helpMenu(actor: Actor): Reply {
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
-    '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 🆘 SUPPORT',
+    '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 SUPPORT',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
   );
 }

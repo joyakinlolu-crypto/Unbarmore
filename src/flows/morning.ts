@@ -5,6 +5,7 @@ import { clientStats, lapsed } from './clients.js';
 import { periodRange } from './insights.js';
 import { firstName, reminderText } from '../lib/debtReminders.js';
 import { waLink } from '../lib/waLink.js';
+import { runOutFocus, runOutLine, runOutRisk, WINDOW_DAYS, type RunOut } from '../lib/runOut.js';
 
 /**
  * The 7 AM note: who to follow up with TODAY. Built from the owner's own records, so it works for a shop (stock, customers who
@@ -17,6 +18,8 @@ export interface MorningFacts {
   debts: DueDebt[];
   quiet: { name: string; days: number; spent: number }[];
   lowStock: { name: string; left: number }[];
+  /** Items that will sell out within days at their real selling speed (see lib/runOut.ts). Preferred over the flat lowStock line. */
+  runningOut?: RunOut[];
   isMonday: boolean;
   /** Gentle invitation to the web app: 'open' = hasn't opened it yet, 'install' = opened it but no Home Screen alert yet, null = nothing today. */
   appNudge?: AppNudge;
@@ -65,13 +68,14 @@ function debtLine(d: DueDebt): string {
 
 /** Pure: facts in, message out. Priority of the single "start with" line: overdue/today debts > upcoming > quiet customers > low stock > log yesterday. */
 export function composeMorning(f: MorningFacts): MorningMessage {
-  const debts = f.debts.slice(0, 3), quiet = f.quiet.slice(0, 1), low = f.lowStock.slice(0, 1);
+  const debts = f.debts.slice(0, 3), quiet = f.quiet.slice(0, 1), ro = f.runningOut?.[0], low = ro ? [] : f.lowStock.slice(0, 1);
   const lines: string[] = [`☀️ *Good morning, ${f.businessName}!*`];
   lines.push(f.yesterday && f.yesterday.count > 0 ? `Yesterday: ${f.yesterday.line}` : 'Nothing was recorded yesterday.');
 
   const items = [
     ...debts.map(debtLine),
     ...quiet.map((c) => `• ${c.name} hasn't bought in ${plural(c.days, 'day')} (spent ${ngn(c.spent)})`),
+    ...(ro ? [`• ${runOutLine(ro)}`] : []),
     ...low.map((p) => `• ${p.name}: only ${p.left} left`),
   ];
   if (items.length) lines.push('', '*Follow up today:*', ...items);
@@ -83,6 +87,7 @@ export function composeMorning(f: MorningFacts): MorningMessage {
   else if (debts[0] && debts[0].late === null) focus = `👉 *Start with ${debts[0].name}:* ${ngn(debts[0].amount)} is still waiting. A friendly nudge today.`;
   else if (upcoming) focus = `👉 Get ready: ${upcoming.name}'s ${ngn(upcoming.amount)} is due soon. Remind them early.`;
   else if (quiet[0]) focus = `👉 *Message ${quiet[0].name} today.* A past customer is the cheapest sale you can make.`;
+  else if (ro) focus = runOutFocus(ro);
   else if (low[0]) focus = `👉 Restock *${low[0].name}* before you miss a sale.`;
   else if (!f.yesterday || f.yesterday.count === 0) focus = '👉 Send me yesterday\'s sales and expenses in one voice note so your books stay right.';
   else focus = '👉 Have a great day! Send a voice note when the first sale or expense happens.';
@@ -119,6 +124,18 @@ export async function dueDebts(businessId: string, horizonDays = 2, today = watD
   return oldest && dated.length < 3 ? [...dated, oldest] : dated;
 }
 
+/** Items that will sell out within a few days at the speed they really sell (last 14 days of confirmed sales). */
+export async function runningOutFor(businessId: string): Promise<RunOut[]> {
+  const since = new Date(Date.now() - WINDOW_DAYS * DAY).toISOString();
+  const { data: sales } = await db.from('transactions').select('product_id, quantity')
+    .eq('business_id', businessId).eq('tx_type', 'sale').eq('status', 'confirmed').not('product_id', 'is', null).gte('transaction_date', since).limit(5000);
+  const sold = new Map<string, number>();
+  for (const t of sales ?? []) sold.set(t.product_id as string, (sold.get(t.product_id as string) ?? 0) + Number(t.quantity));
+  if (!sold.size) return [];
+  const { data: prods } = await db.from('products').select('id, name, stock_qty').eq('business_id', businessId).in('id', [...sold.keys()]).gt('cost_price_ngn', 0);
+  return runOutRisk((prods ?? []).map((p) => ({ id: p.id as string, name: p.name as string, stock: Number(p.stock_qty) })), sold).slice(0, 3);
+}
+
 export async function gatherMorning(biz: Business): Promise<MorningFacts> {
   const { from, to } = periodRange('yesterday');
   const [s, debts, clients, prods] = await Promise.all([
@@ -134,6 +151,7 @@ export async function gatherMorning(biz: Business): Promise<MorningFacts> {
     debts,
     quiet: lapsed(clients).slice(0, 2).map((c) => ({ name: c.name, days: Math.floor((Date.now() - new Date(c.lastBuy!).getTime()) / DAY), spent: c.spent })),
     lowStock: (prods.data ?? []).map((p) => ({ name: p.name as string, left: Math.max(0, Number(p.stock_qty)) })),
+    runningOut: await runningOutFor(biz.id).catch(() => []),
     isMonday: new Date(Date.now() + 3600_000).getUTCDay() === 1,
     appNudge: appNudgeFor(biz.created_at, await appUsage(biz.id).catch(() => 'alerts' as const), 'morning'),
   };

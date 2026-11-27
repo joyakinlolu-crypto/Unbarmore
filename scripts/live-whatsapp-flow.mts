@@ -294,6 +294,29 @@ try {
   const ct = r.reply?.text ?? '';
   ok('"close shop" → expected cash, bank transfers, total expenses and new credit', !!r.reply && /Expected bank transfers/.test(ct) && /Total expenses: ₦3,000/.test(ct) && /New credit given today: ₦0/.test(ct), ct.replace(/\n/g, ' | ').slice(0, 220));
   ok('CLOSE counts only today\'s confirmed sale (₦45,000); the undone one is excluded', /Sales today ₦45,000/.test(ct));
+  ok('CLOSE ends with the call to action: count the drawer and send COUNT 85000', /COUNT 85000/.test(ct));
+
+  // ───── 12c. cash count + profit split (needs migration 010) ─────
+  const b010 = Array.isArray(await (await rest('cash_counts?select=id&limit=1')).json());
+  if (!b010) console.log('⏭️  cash-count tests skipped: run supabase/migrations/010_cash_counts_and_split.sql in Supabase, then re-run');
+  else {
+    r = await ask('count-1', () => text('COUNT 50000'), (v) => /starting cash/i.test(v.text));
+    ok('first "COUNT 50000" → sets the starting cash, tells the owner to count again tomorrow', !!r.reply && /₦50,000/.test(r.reply.text) && real(r.all).length === 1, r.reply?.text.replace(/\n/g, ' | ').slice(0, 160));
+    r = await ask('count-2', () => text('count 40k'), (v) => /missing|matches|more than expected/i.test(v.text));
+    ok('next count ₦40,000 with ₦50,000 expected → "₦10,000 is missing" + likely causes, ONE message', !!r.reply && /₦10,000 is missing/.test(r.reply.text) && /expected ₦50,000/.test(r.reply.text) && /taken out for yourself/.test(r.reply.text) && real(r.all).length === 1, r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
+    const cc = await rows(`cash_counts?business_id=eq.${biz!.id}&select=counted_ngn,expected_ngn,variance_ngn&order=counted_at.asc`);
+    ok('database: two counts saved, the second with expected ₦50,000 and variance −₦10,000', cc.length === 2 && cc[0]?.expected_ngn === null && Number(cc[1]?.expected_ngn) === 50000 && Number(cc[1]?.variance_ngn) === -10000, JSON.stringify(cc));
+    r = await ask('count-3', () => text('count 40000'), (v) => /matches/i.test(v.text));
+    ok('counting the same amount again → "Your cash matches"', !!r.reply);
+
+    r = await ask('split-show', () => text('SET ASIDE'), (v) => /evening split/i.test(v.text));
+    ok('SET ASIDE → shows the default 50% restock / 20% reserve / 30% pay', !!r.reply && /Restock 50%/.test(r.reply.text) && /Pay yourself 30%/.test(r.reply.text));
+    r = await ask('split-bad', () => text('SET ASIDE 50 20 40'), (v) => /add up to 100/i.test(v.text));
+    ok('SET ASIDE 50 20 40 (adds to 110) is refused', !!r.reply);
+    r = await ask('split-set', () => text('SET ASIDE 40 20 40'), (v) => /Done/i.test(v.text));
+    ok('SET ASIDE 40 20 40 → saved on the business', !!r.reply && (await rows(`businesses?id=eq.${biz!.id}&select=setaside_split`))[0]?.setaside_split === '40/20/40');
+  }
+
 
   // ───── 12c. low-stock warning on a sale ─────
   r = await ask('restock', () => text('bought 6 gele at 4k each cash'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));

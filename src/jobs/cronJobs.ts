@@ -11,6 +11,8 @@ import { buildDailyPush } from '../flows/dailyPush.js';
 import { nudgeLine } from '../flows/onboarding.js';
 import { appNudgeFor, appNudgeText, appUsage, composeMorning, gatherMorning, tomorrowLine } from '../flows/morning.js';
 import { remindersOff } from '../flows/reminders.js';
+import { profitView } from '../lib/profit.js';
+import { setAsideText, splitFromString } from '../lib/setAside.js';
 import { periodRange, todayLine } from '../flows/insights.js';
 import { buildWeeklyReport, reportTemplateParams, reportText } from '../flows/reports.js';
 
@@ -105,9 +107,11 @@ async function dailyCheckin(): Promise<void> {
         `🌙 *Cash-in-hand check*`,
         await todayLine(biz.id),
         `Money received today: ${ngn(t.cash_in_ngn)}`,
-        '',
-        '*Does the cash + transfers you are holding match this?* If not, something is missing — reply with what\'s off.',
       );
+      const pv = profitView(t);
+      const aside = pv.basis === 'true' ? setAsideText(pv.profit, pv.incomplete, splitFromString(biz.setaside_split)) : null;
+      if (aside) r.text('', ...aside);
+      r.text('', '💵 *Count your drawer* and send *COUNT 85000* (your real amount). If any money is missing, I\'ll tell you by how much.');
     }
     // Growth: EOD owner audit of staff activity, folded into the same message (no extra send).
     if (biz.subscription_tier === 'growth_15k') {

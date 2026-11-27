@@ -43,6 +43,8 @@ export interface Business {
   referral_wallet_ngn: number;
   /** The owner chose to use wallet money on their own renewal instead of cash. Needs migration 009. */
   referral_apply_to_renewal?: boolean;
+  /** Evening profit split "restock/reserve/pay", e.g. 50/20/30. NULL = default. Needs migration 010. */
+  setaside_split?: string | null;
   total_value_recovered_ngn: number;
   google_sheet_id: string | null;
   created_at: string;

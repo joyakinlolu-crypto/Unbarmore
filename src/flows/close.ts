@@ -69,7 +69,8 @@ export function closeShopText(name: string, dateLabel: string, s: DaySummary, pe
     s.unspecifiedCount ? `⚠️ ${s.unspecifiedCount} entr${s.unspecifiedCount === 1 ? 'y has' : 'ies have'} no payment method (in ${ngn(s.unspecifiedIn)}, out ${ngn(s.unspecifiedOut)}) — not counted above. Say "cash" or "transfer" when you log.` : '',
     pendingEntries ? `⏳ ${pendingEntries} entr${pendingEntries === 1 ? 'y is' : 'ies are'} still waiting for you to tap Confirm — they are not counted.` : '',
     '',
-    '_Count the drawer: it should hold this amount PLUS the cash you opened with. Check transfers in your bank app._',
+    '💵 *Now count your drawer* and send *COUNT 85000* (your real amount). I\'ll tell you if any money is missing.',
+    '_Check transfers in your bank app too._',
   ].filter((l, i, a) => l !== '' || (a[i - 1] !== '' && i !== a.length - 1));
 }
 
