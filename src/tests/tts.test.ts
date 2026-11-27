@@ -73,3 +73,42 @@ describe('voiceover: only the ad is spoken', () => {
     expect(w.length).toBe(144);
   });
 });
+
+describe('Azure as the safety net when every Gemini speech model is capped', () => {
+  const cap = new Error('Quota exceeded: generate content requests per day limit exceeded on Free Tier');
+  it('with an Azure key, an English video still gets a voice (mp3) instead of silence', async () => {
+    process.env.AZURE_SPEECH_KEY = 'k';
+    vi.resetModules();
+    const g = vi.fn().mockRejectedValue(cap);
+    vi.doMock('@google/genai', () => ({ GoogleGenAI: class { models = { generateContent: g }; } }));
+    vi.doMock('../lib/alerts.js', () => ({ noteGeminiError: vi.fn(), alertAdmin: vi.fn() }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(Buffer.from('ID3fakemp3'), { status: 200 })));
+    const mod = await import('../services/ttsService.js');
+    mod.ttsTuning.delayMs = 0; mod.ttsTuning.rounds = 1;
+    const r = await mod.synthesizeVoiceover('Hello shop');
+    expect(r.ext).toBe('mp3'); expect(r.mime).toBe('audio/mpeg');
+    vi.unstubAllGlobals(); delete process.env.AZURE_SPEECH_KEY;
+  });
+  it('Yoruba never goes to an English voice: it fails honestly so the video is music-only', async () => {
+    process.env.AZURE_SPEECH_KEY = 'k';
+    vi.resetModules();
+    const g = vi.fn().mockRejectedValue(cap);
+    vi.doMock('@google/genai', () => ({ GoogleGenAI: class { models = { generateContent: g }; } }));
+    vi.doMock('../lib/alerts.js', () => ({ noteGeminiError: vi.fn(), alertAdmin: vi.fn() }));
+    const fetchSpy = vi.fn(); vi.stubGlobal('fetch', fetchSpy);
+    const mod = await import('../services/ttsService.js');
+    mod.ttsTuning.delayMs = 0; mod.ttsTuning.rounds = 1;
+    await expect(mod.synthesizeVoiceover('Bawo ni', { yoruba: true })).rejects.toThrow();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals(); delete process.env.AZURE_SPEECH_KEY;
+  });
+  it('without an Azure key the failure is passed on, as before', async () => {
+    delete process.env.AZURE_SPEECH_KEY;
+    vi.resetModules();
+    vi.doMock('@google/genai', () => ({ GoogleGenAI: class { models = { generateContent: vi.fn().mockRejectedValue(cap) }; } }));
+    vi.doMock('../lib/alerts.js', () => ({ noteGeminiError: vi.fn(), alertAdmin: vi.fn() }));
+    const mod = await import('../services/ttsService.js');
+    mod.ttsTuning.delayMs = 0; mod.ttsTuning.rounds = 1;
+    await expect(mod.synthesizeVoiceover('Hello shop')).rejects.toThrow('Free Tier');
+  });
+});

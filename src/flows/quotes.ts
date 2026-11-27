@@ -1,6 +1,6 @@
 import { PLANS } from '../config/plans.js';
 import { env } from '../config/env.js';
-import { confirmBatch, consumeQuota, createPendingBatch, db, signedUrl, uploadFile, type Actor, type TxnDraft } from '../db/supabase.js';
+import { consumeQuota, createPendingBatch, db, signedUrl, uploadFile, type Actor, type TxnDraft } from '../db/supabase.js';
 import { dateLabel, daysLeft, DEFAULT_VALID_DAYS, expiryPhrase, extendedUntil, lineTotal, quoteLabel, quoteSummaryLines, quoteTotal, validUntil, type QuoteLine } from '../lib/quote.js';
 import { ngn, watDateKey } from '../lib/money.js';
 import { quotePdf } from '../services/pdfGenerator.js';
@@ -145,8 +145,8 @@ export async function quotePaid(actor: Actor, ref: { no?: number; id?: string },
       amount_paid_ngn: q.delivery_fee_ngn, payment_method: method, item_name: null, customer_name: q.customer_name,
     });
     const { batchId } = await createPendingBatch(actor, 'whatsapp_text', drafts);
-    await confirmBatch(batchId);
-    const r = await confirmAndRespond(actor, batchId).catch(() => reply(actor.phone).text('✅ Saved'));
+    // confirmAndRespond is what confirms the batch (and replies with the profit line, stock warnings, Undo and receipt buttons).
+    const r = await confirmAndRespond(actor, batchId);
     return r.text('', `🧾 ${quoteLabel(q.quote_no)} marked paid (${method}).`);
   } catch (err) {
     await db.from('quotes').update({ status: 'open', paid_at: null, paid_method: null }).eq('id', q.id).eq('business_id', actor.business.id);

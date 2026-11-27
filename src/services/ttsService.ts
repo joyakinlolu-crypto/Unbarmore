@@ -1,7 +1,7 @@
 import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 import { GoogleGenAI } from '@google/genai';
 import { env } from '../config/env.js';
-import { noteGeminiError } from '../lib/alerts.js';
+import { alertAdmin, noteGeminiError } from '../lib/alerts.js';
 import { recordUsage } from '../lib/usage.js';
 
 export interface Voiceover { data: Buffer; ext: 'mp3' | 'wav'; mime: string }
@@ -68,7 +68,17 @@ async function geminiTts(text: string, yoruba = false): Promise<Voiceover> {
 
 /** Nigerian-accented voiceover. Default provider "gemini" needs no extra account (uses GEMINI_API_KEY). */
 export async function synthesizeVoiceover(text: string, opts: { pidgin?: boolean; yoruba?: boolean } = {}): Promise<Voiceover> {
-  if (env.TTS_PROVIDER === 'gemini') return geminiTts(text, opts.yoruba);
+  if (env.TTS_PROVIDER === 'gemini') {
+    try { return await geminiTts(text, opts.yoruba); }
+    catch (e) {
+      // Google caps every Gemini speech model at ~10 requests a day per model on a free-tier quota (our prepaid credits do not lift it).
+      // If an Azure Speech key is configured, use Nigerian-English Azure instead of shipping a silent video. Yoruba stays Gemini-only:
+      // an English voice reading Yoruba would be worse than music.
+      if (!env.AZURE_SPEECH_KEY || opts.yoruba) throw e;
+      void alertAdmin('gemini', 'Gemini voice is at its daily cap: using the Azure voice instead', String((e as Error)?.message ?? e).slice(0, 160), { key: 'tts-azure-fallback', cooldownS: 3600 });
+      return { data: await azureTts(text), ext: 'mp3', mime: 'audio/mpeg' };
+    }
+  }
   if (env.TTS_PROVIDER === 'azure') return { data: await azureTts(text), ext: 'mp3', mime: 'audio/mpeg' };
 
   gClient ??= new TextToSpeechClient();

@@ -63,12 +63,13 @@ vi.mock('../db/supabase.js', () => {
     uploadFile: vi.fn(async (_b: string, p: string, d: Buffer) => { m.uploaded.push({ path: p, size: d.length }); return p; }),
     signedUrl: vi.fn(async (_b: string, p: string) => `https://files.test/${p}`),
     createPendingBatch: vi.fn(async (_a: unknown, _s: string, drafts: any[]) => { m.batches.push(drafts); return { batchId: `batch-${m.batches.length}`, rows: [] }; }),
-    confirmBatch: vi.fn(async (id: string) => { m.confirmed.push(id); return 1; }),
+    confirmBatch: vi.fn(async () => { throw new Error('quotes must not confirm the batch themselves: confirmAndRespond does it'); }),
     downloadFile: vi.fn(), updateBusiness: vi.fn(), setSession: vi.fn(),
   };
 });
 vi.mock('../flows/ledger.js', () => ({
-  confirmAndRespond: vi.fn(async () => (await import('../services/whatsapp.js')).reply('2348000000001').text('✅ Saved', '📊 Today: Sales ₦105,000')),
+  // The real confirmAndRespond is what confirms the batch; calling confirmBatch first made it answer "Already saved".
+  confirmAndRespond: vi.fn(async (_a: unknown, id: string) => { m.confirmed.push(id); return (await import('../services/whatsapp.js')).reply('2348000000001').text('✅ Saved', '📊 Today: Sales ₦105,000'); }),
   quotaReply: vi.fn(() => (globalThis as any).__reply('2348000000001').text('QUOTA')),
 }));
 vi.mock('../flows/branding.js', () => ({ loadLogo: vi.fn(async () => null), initials: (n: string) => n.slice(0, 2).toUpperCase(), saveLogo: vi.fn(), logoPrompt: vi.fn() }));

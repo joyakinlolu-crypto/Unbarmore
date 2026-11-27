@@ -70,6 +70,7 @@ const view = (s: Sent) => {
       rows: (i.action?.sections ?? []).flatMap((x: any) => x.rows.map((r: any) => r.id)) as string[],
     };
   }
+  if (p.type === 'image') return { kind: 'image', text: (p.image.caption ?? '') as string, buttons: [], header: { type: 'image', link: p.image.link as string }, rows: [] };
   if (p.type === 'video') return { kind: 'video', text: (p.video.caption ?? '') as string, buttons: [], header: { type: 'video', link: p.video.link as string }, rows: [] };
   if (p.type === 'document') return { kind: 'document', text: (p.document.caption ?? '') as string, buttons: [], header: { type: 'document', link: p.document.link as string }, rows: [] };
   return { kind: p.type as string, text: JSON.stringify(p), buttons: [], header: null, rows: [] };
@@ -392,8 +393,8 @@ try {
     ok('"Q-001 PAID" → asks HOW they paid (transfer / cash / POS) before recording anything', !!r.reply && r.reply.buttons.length === 3 && (await rows(`quotes?business_id=eq.${biz!.id}&select=status`))[0]?.status === 'open');
     r = await ask('paid-cash', () => button(r.reply!.buttons.find((b) => b.id.endsWith(':cash'))!.id), (v) => /marked paid/.test(v.text));
     ok('tap Cash → sale recorded (₦107,000 incl. delivery), profit line shown, "Q-001 marked paid (cash)", ONE message', !!r.reply && /Saved/.test(r.reply.text) && /Q-001 marked paid \(cash\)/.test(r.reply.text) && real(r.all).length === 1, r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
-    const saleRows = await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&payment_method=eq.cash&description=in.(*Lace*,*Gele*,Delivery)&select=description,total_ngn:total_amount_ngn,amount_paid_ngn`);
-    ok('database: the quote became sale lines (Lace ₦100,000, Gele ₦5,000, Delivery ₦2,000), fully paid in cash, and the quote is closed', saleRows.length >= 3 && (await rows(`quotes?business_id=eq.${biz!.id}&select=status,paid_method`))[0]?.status === 'paid', JSON.stringify(saleRows).slice(0, 200));
+    const saleRows = await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&payment_method=eq.cash&or=(description.ilike.*Lace*,description.ilike.*Gele*,description.eq.Delivery)&select=description,total_amount_ngn,amount_paid_ngn`);
+    ok('database: the quote became sale lines (Lace ₦100,000, Gele ₦5,000, Delivery ₦2,000), fully paid in cash, and the quote is closed', saleRows.length >= 3 && saleRows.some((x: any) => Number(x.total_amount_ngn) === 100000) && saleRows.every((x: any) => Number(x.total_amount_ngn) === Number(x.amount_paid_ngn)) && (await rows(`quotes?business_id=eq.${biz!.id}&select=status,paid_method`))[0]?.status === 'paid', JSON.stringify(saleRows).slice(0, 200));
     const sBefore = (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length;
     r = await ask('paid-twice', () => text('Q-001 PAID cash'), (v) => /already marked paid/.test(v.text));
     ok('saying PAID a second time records nothing more', !!r.reply && (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length === sBefore);
@@ -562,6 +563,7 @@ try {
     const wav = path.join(tmp, 'vo-check.wav');
     if (!as) { ok('(skipped: this video has no audio because Google speech is rate-limited right now; the check above already reported it)', true); } else {
     execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
+    if (hasAudio) {
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
     let said = '';
@@ -647,7 +649,11 @@ try {
   if (yoVideo?.header?.link) {
     const buf = Buffer.from(await (await fetch(yoVideo.header.link)).arrayBuffer());
     const f = path.join(tmp, 'yo.mp4'); fs.writeFileSync(f, buf);
-    const wav = path.join(tmp, 'yo.wav'); execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
+    const wav = path.join(tmp, 'yo.wav');
+    const hasAudio = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', f]).toString().includes('audio');
+    // Google caps every Gemini speech model at 10 requests/day on a free-tier quota: a silent (music-only) video is a real production problem, so it fails loudly here.
+    ok('the Yoruba video has a VOICEOVER track (not music only)', hasAudio, hasAudio ? '' : 'no voice: the speech models are at Google\'s daily cap (see TTS notes)');
+    if (hasAudio) execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
     const durY = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).toString());
     ok('a bought credit makes a FULL-length video (more than 13 s), not the ~10 s trial preview', durY > 13, `${durY.toFixed(1)}s`);
     const { GoogleGenAI } = await import('@google/genai');
@@ -659,6 +665,7 @@ try {
       ok('the voice is YORUBA (Yoruba words/diacritics heard), says the price 17,500, and still asks to message on WhatsApp', /[ẹọṣẸỌṢ]|\b(ẹ|e) (wá|wa|fi)|péré|pere|lórí|lori/i.test(said) && /17,?500|seventeen/i.test(said) && /whatsapp/i.test(said), said.slice(0, 200));
       ok('the Yoruba voice speaks no order code and no phone number (the number is on screen, not spoken)', !/UNB-|order code|\b0\d{9,10}\b|\b\d{4} \d{3} \d{4}\b/i.test(said));
     } else { ok('without migration 006 the video is made in English instead of failing', /whatsapp/i.test(said), said.slice(0, 120)); }
+    }
     fs.copyFileSync(f, path.resolve('tmp', 'flow-video-yoruba.mp4'));
   }
 
