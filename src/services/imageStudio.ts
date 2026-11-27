@@ -34,6 +34,7 @@ export async function enhanceProductPhoto(
   image: { data: Buffer; mimeType: string },
   theme: StudioTheme,
 ): Promise<{ data: Buffer; mimeType: string; enhanced: boolean }> {
+  if (env.DISABLE_PHOTO_CLEANUP === 'true') return { ...image, enhanced: false };
   try {
     const res = await genai.models.generateContent({
       model: env.GEMINI_IMAGE_MODEL,

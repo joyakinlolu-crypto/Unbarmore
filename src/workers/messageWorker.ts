@@ -28,8 +28,8 @@ import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.
 import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { displayPhone } from '../lib/phone.js';
-import { alertAdmin } from '../lib/alerts.js';
-import { looksLikeBusinessName } from '../lib/businessName.js';
+import { alertAdmin, classifyGeminiError } from '../lib/alerts.js';
+import { extractBusinessName, looksLikeBusinessName } from '../lib/businessName.js';
 import { adminAlertCommand, deleteDataRequest, missedAlertsReply } from '../flows/adminAlerts.js';
 import { closeShopReply } from '../flows/close.js';
 import { AWAIT_LOGO_KEY, AWAIT_LOGO_TTL_S, logoAskReply, saveLogo, useNameAsLogo } from '../flows/branding.js';
@@ -228,8 +228,8 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
   }
 
   if (session.current_state === 'ONBOARDING_NAME') {
-    const name = text.replace(/\s+/g, ' ').slice(0, 80);
-    if (!looksLikeBusinessName(name)) return reply(phone).text('That doesn\'t look like a business name. What do you call your business? It will show on your receipts, e.g. _Ada Fabrics_.');
+    const name = extractBusinessName(text);
+    if (!name) return reply(phone).text('I need just the *short name* of your business, the name customers know you by. It will show on your receipts, e.g. _Ada Fabrics_.');
     const biz = await createBusiness(phone, name, profileName);
     const savedCode = (session.pending_payload.referral_code as string | null) ?? null;
     if (savedCode) {
@@ -383,7 +383,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (/^delete (?:all )?my (?:data|account)$/i.test(t)) return deleteDataRequest(actor.phone, { business: b.name, role: actor.isStaff ? 'staff' : 'owner' });
   const ren = t.match(/^(?:rename (?:my )?(?:business|shop)|(?:my )?(?:business|shop) name(?: is)?|change (?:my )?(?:business|shop) name(?: to)?)\s+(.{2,80})$/i);
   if (ren && !actor.isStaff) {
-    const newName = ren[1]!.replace(/\s+/g, ' ').trim();
+    const newName = extractBusinessName(ren[1]!) ?? '';
     if (!looksLikeBusinessName(newName)) return reply(actor.phone).text('That doesn\'t look like a business name. Try: _RENAME BUSINESS Ada Fabrics_');
     await updateBusiness(actor.business.id, { name: newName });
     return reply(actor.phone).text(`✅ Done. Your business is now *${newName}*. It shows on new receipts and in your app.`);
@@ -780,8 +780,17 @@ export function startMessageWorkers() {
   inbound.on('failed', (job, err) => {
     if (!job || err instanceof DelayedError || job.attemptsMade < (job.opts.attempts ?? 1)) return;
     console.error('[inbound] failed', job.data.msg.id, err);
-    void alertAdmin('worker', `Could not process a customer message (…${job.data.msg.from.slice(-4)}, type ${job.data.msg.type})`, String((err as Error)?.message ?? err), { key: String((err as Error)?.message ?? err).slice(0, 60), cooldownS: 900 });
-    void reply(job.data.msg.from).text('😓 Sorry, I couldn\'t process that. Please try again in a minute.').send().catch(() => undefined);
+    const cls = classifyGeminiError(err);
+    if (cls === '402' || cls === '401' || cls === '403') {
+      // Our AI account is out of credit / the key is rejected: the owner already got ONE clear Gemini alert. Don't add a second, noisy one,
+      // and tell the customer the truth instead of "try again in a minute" (a minute will not fix it). Once per 30 min per person.
+      void redis.set(`outage_note:${job.data.msg.from}`, '1', 'EX', 1800, 'NX').then((fresh) => {
+        if (fresh) void reply(job.data.msg.from).text('⚠️ Unbarmore is paused for a short while because of a technical problem on our side. Your records are safe. Please try again in a little while.').send().catch(() => undefined);
+      });
+    } else {
+      void alertAdmin('worker', `Could not process a customer message (…${job.data.msg.from.slice(-4)}, type ${job.data.msg.type})`, String((err as Error)?.message ?? err), { key: String((err as Error)?.message ?? err).slice(0, 60), cooldownS: 900 });
+      void reply(job.data.msg.from).text('😓 Sorry, I couldn\'t process that. Please try again in a minute.').send().catch(() => undefined);
+    }
   });
   images.on('failed', (job, err) => {
     console.error('[images] failed', job?.data.phone, err);

@@ -80,7 +80,7 @@ const APOLOGY = /couldn.t process that|couldn.t read those photos/i;
 const logFile = path.join(os.tmpdir(), `bot-${Date.now()}.log`);
 const bot: ChildProcess = spawn('npx', ['tsx', 'src/server.ts'], {
   detached: true, // own process group, so the whole tree (npx → tsx → node) can be stopped; a stale bot on the test port serves old code
-  env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, INTERNAL_ALERT_KEY: 'test-internal-key-123456', WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1', ADMIN_PHONE: PH, SUPPORT_WHATSAPP_URL: 'https://wa.me/2348100000002', INTERIM_NOTICE_MS: '1000' },
+  env: { ...process.env, PROCESS_ROLE: 'all', PORT: String(BOT_PORT), WHATSAPP_GRAPH_BASE: `http://127.0.0.1:${FAKE_PORT}`, DISABLE_PHOTO_CLEANUP: process.env.LIVE_IMAGES === '1' ? 'false' : 'true', INTERNAL_ALERT_KEY: 'test-internal-key-123456', WEB_APP_URL: 'http://localhost:3333', NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1', ADMIN_PHONE: PH, SUPPORT_WHATSAPP_URL: 'https://wa.me/2348100000002', INTERIM_NOTICE_MS: '1000' },
   stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')],
 });
 

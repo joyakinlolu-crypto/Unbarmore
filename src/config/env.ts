@@ -35,6 +35,8 @@ const schema = z.object({
   GEMINI_API_KEY: z.string().min(1),
   GEMINI_TEXT_MODEL: z.string().default('gemini-3.1-flash-lite'),
   GEMINI_TEXT_FALLBACK_MODEL: z.string().default('gemini-3.5-flash-lite'),
+  /** "true" = skip the paid photo-cleanup model (originals are used). For automated tests, so repeated runs don't burn real money. */
+  DISABLE_PHOTO_CLEANUP: z.string().optional(),
   GEMINI_IMAGE_MODEL: z.string().default('gemini-2.5-flash-image'),
 
   TTS_PROVIDER: z.enum(['gemini', 'google', 'azure']).default('gemini'),
