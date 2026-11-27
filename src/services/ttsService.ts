@@ -2,6 +2,7 @@ import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 import { GoogleGenAI } from '@google/genai';
 import { env } from '../config/env.js';
 import { noteGeminiError } from '../lib/alerts.js';
+import { recordUsage } from '../lib/usage.js';
 
 export interface Voiceover { data: Buffer; ext: 'mp3' | 'wav'; mime: string }
 
@@ -42,6 +43,7 @@ async function geminiTts(text: string, yoruba = false): Promise<Voiceover> {
           contents: text,
           config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE } } } },
         });
+        recordUsage('voiceover', res.usageMetadata as never);
         const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
         if (!part?.data) throw new Error('Gemini TTS returned no audio');
         const raw = Buffer.from(part.data, 'base64');

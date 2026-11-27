@@ -20,6 +20,8 @@ export interface Business {
   owner_phone: string;
   /** The number customers should message (shown on videos). null = owner_phone. Needs migration 006. */
   sales_phone?: string | null;
+  /** Bought pay-as-you-go video credits. Needs migration 008. */
+  video_credits?: number;
   business_category: string | null;
   rc_number: string | null;
   logo_url: string | null;
@@ -221,6 +223,19 @@ export async function consumeQuota(b: Business, metric: Metric, amount = 1): Pro
 
 export async function refundQuota(businessId: string, metric: Metric, amount = 1): Promise<void> {
   await db.rpc('refund_quota', { p_business_id: businessId, p_metric: metric, p_amount: amount });
+}
+
+/** Video credits (migration 008). Reads fail closed: if the migration is missing there are simply no credits. */
+export async function consumeVideoCredit(businessId: string): Promise<boolean> {
+  try { const { data, error } = await db.rpc('consume_video_credit', { p_business_id: businessId }); return !error && data === true; } catch { return false; }
+}
+export async function addVideoCredits(businessId: string, qty: number): Promise<number> {
+  const { data, error } = await db.rpc('add_video_credits', { p_business_id: businessId, p_qty: qty });
+  if (error) throw new Error(`[db:addVideoCredits] ${error.message}`);
+  return Number(data);
+}
+export async function refundVideoCredit(businessId: string): Promise<void> {
+  await db.rpc('refund_video_credit', { p_business_id: businessId });
 }
 
 // ───────────── Lazy products & customers ─────────────

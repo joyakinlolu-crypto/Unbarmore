@@ -4,8 +4,9 @@ import { env } from './config/env.js';
 import { db, isInServiceWindow, touchInbound } from './db/supabase.js';
 import { inboundQueue } from './lib/queues.js';
 import { extractMessages, verifyMetaSignature, reply, type WaWebhookBody } from './services/whatsapp.js';
-import { handlePaystackEvent, paymentsLive, verifyPaystackSignature } from './services/paystack.js';
+import { handlePaystackEvent, paymentsLive, verifyPaystackSignature, type CreditOutcome, type PaymentOutcome } from './services/paystack.js';
 import { ngn } from './lib/money.js';
+import { PLANS } from './config/plans.js';
 import { startMessageWorkers } from './workers/messageWorker.js';
 import { startVideoWorker } from './workers/videoWorker.js';
 import { registerSchedules, startCronWorker } from './jobs/cronJobs.js';
@@ -111,12 +112,21 @@ app.post('/webhooks/paystack', async (req, res) => {
     res.code(200).send('ok');
     if (!outcome) return;
 
-    const { business: b, tier, interval, referrerId, referralCredited } = outcome;
+    const credit = outcome as CreditOutcome;
+    if (credit.kind === 'video_credits') {
+      await reply(credit.business.owner_phone).text(
+        `🎉 *Payment received: ${credit.qty} video credit${credit.qty > 1 ? 's' : ''} added!*`,
+        `You now have *${credit.balance}*. Send 2–3 product photos with the name and price and I'll make it.`,
+      ).send().catch(() => undefined);
+      return;
+    }
+
+    const { business: b, tier, interval, referrerId, referralCredited } = outcome as PaymentOutcome;
     const label = tier === 'growth_15k' ? 'Growth' : 'Starter';
     // Payer just interacted (they were on the checkout link) — but the window may be stale; failure is non-fatal.
     await reply(b.owner_phone).text(
       `🎉 *Payment received — you're on ${label}${interval === 'annual' ? ' (yearly)' : ''}!*`,
-      tier === 'growth_15k' ? '50 videos · unlimited logging · 10 staff numbers · Google Sheets sync' : '15 videos · 250 logged messages · 150 alert checks · voice notes · Sunday CEO report',
+      tier === 'growth_15k' ? '50 videos · unlimited logging · 10 staff numbers · Google Sheets sync' : `${PLANS.starter_5k.videos_used_this_month} videos · 250 logged messages · 150 alert checks · voice notes · Sunday CEO report`,
       referralCredited ? `🎁 ₦1,000 referral reward added to your wallet (${ngn(b.referral_wallet_ngn)}).` : '',
       '', 'Send a voice note or photos to get going.',
     ).send().catch(() => undefined);

@@ -2,6 +2,7 @@ import { GoogleGenAI, type Part } from '@google/genai';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { noteGeminiError } from '../lib/alerts.js';
+import { recordUsage, type UsageKind } from '../lib/usage.js';
 import { MINI_VIDEO } from '../config/plans.js';
 
 export const genai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
@@ -132,6 +133,8 @@ export async function generateStructured<T>(opts: {
   system: string;
   parts: Part[];
   temperature?: number;
+  /** What this call is, for the per-shop usage log. Derived from the parts when not given. */
+  kind?: UsageKind;
 }): Promise<T> {
   let jsonSchema = schemaCache.get(opts.schema);
   if (!jsonSchema) {
@@ -158,6 +161,8 @@ export async function generateStructured<T>(opts: {
             httpOptions: { timeout: 15_000 },
           },
         });
+        const mime = (opts.parts.find((p) => p.inlineData) as { inlineData?: { mimeType?: string } } | undefined)?.inlineData?.mimeType ?? '';
+        recordUsage(opts.kind ?? (mime.startsWith('audio') ? 'voice' : mime.startsWith('image') ? 'screenshot' : 'message'), res.usageMetadata as never);
         const text = res.text;
         if (!text) throw new Error('empty model response');
         const parsed = opts.schema.safeParse(JSON.parse(text));
@@ -278,6 +283,7 @@ export async function writeVideoScript(p: {
   const mini = !!p.mini;
   const voice = p.voice ?? (p.pidgin ? 'pidgin' : 'english');
   return generateStructured({
+    kind: 'script',
     schema: videoScriptSchema(mini),
     temperature: 0.8,
     system:

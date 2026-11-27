@@ -1,5 +1,7 @@
 import { alertAdmin, recentAlerts, takeMissedAlerts } from '../lib/alerts.js';
 import { reply, type Reply } from '../services/whatsapp.js';
+import { addVideoCredits, db, isInServiceWindow } from '../db/supabase.js';
+import { ngn } from '../lib/money.js';
 
 const wat = (t: number) => new Date(t + 3600_000).toISOString().slice(5, 16).replace('T', ' ');
 
@@ -10,6 +12,23 @@ export async function adminAlertCommand(phone: string, text: string): Promise<Re
     const res = await alertAdmin('test', 'Test alert: if you can read this, failure alerts reach you', '', { key: String(Date.now()), cooldownS: 1 });
     return reply(phone).text(res === 'sent' ? '🧪 Test alert sent: you should see it as its own message just above this one.' : `🧪 Test alert result: ${res}.`);
   }
+  // GRANT VIDEOS 08012345678 3: add video credits after a bank transfer (until card payments are live)
+  const grant = t.match(/^grant videos?\s+(\+?\d[\d\s]{8,14}\d)\s+(\d{1,3})$/i);
+  if (grant) {
+    const digits = grant[1]!.replace(/\D/g, '');
+    const phoneKey = digits.startsWith('234') ? digits : digits.startsWith('0') ? `234${digits.slice(1)}` : `234${digits}`;
+    const { data: biz } = await db.from('businesses').select('id, name').eq('owner_phone', phoneKey).maybeSingle();
+    if (!biz) return reply(phone).text(`No shop found for ${grant[1]}. Check the number (the owner's WhatsApp number).`);
+    try {
+      const qty = Number(grant[2]);
+      const balance = await addVideoCredits(biz.id as string, qty);
+      if (await isInServiceWindow(phoneKey)) await reply(phoneKey).text(`🎉 ${qty} video credit${qty > 1 ? 's' : ''} added! You now have *${balance}*. Send 2–3 product photos with the name and price to make one.`).send().catch(() => undefined);
+      return reply(phone).text(`✅ Added ${qty} video credit${qty > 1 ? 's' : ''} to *${biz.name}*. Balance: ${balance}.`);
+    } catch (e) {
+      return reply(phone).text(`Could not add credits: ${String((e as Error)?.message ?? e).slice(0, 120)} (has migration 008 been run?)`);
+    }
+  }
+  if (/^costs?$/i.test(t)) return costsReply(phone);
   if (/^alerts?$/i.test(t)) {
     const list = await recentAlerts(10);
     if (!list.length) return reply(phone).text('✅ No alerts in the last 7 days.');
@@ -33,5 +52,37 @@ export async function deleteDataRequest(phone: string, who: { business: string; 
     'We will delete your account, records, customers, photos and videos within 30 days and confirm here. Records the law requires us to keep (like payment records) are kept for the legal period.',
     '',
     'Changed your mind? Just keep using Unbarmore and tell us to cancel the request. To only stop messages, send *STOP*.',
+  );
+}
+
+/** ADMIN: what the AI really cost over the last 7 days, per shop and per kind of work. ESTIMATES (see src/lib/aiCost.ts): compare with Google AI Studio's Spend page. */
+async function costsReply(phone: string): Promise<Reply> {
+  const since = new Date(Date.now() + 3600_000 - 6 * 86400_000).toISOString().slice(0, 10);
+  const { data, error } = await db.from('ai_usage').select('business_id, kind, calls, images, est_cost_ngn').gte('day', since);
+  if (error) return reply(phone).text('The usage log is not set up yet. Run migration 008 in Supabase first.');
+  if (!data?.length) return reply(phone).text('📊 No AI usage logged yet. It fills as shops use the bot.');
+  const byShop = new Map<string, { cost: number; photos: number; calls: number }>();
+  const byKind = new Map<string, number>();
+  let total = 0, photos = 0;
+  for (const r of data) {
+    const c = Number(r.est_cost_ngn), k = String(r.kind);
+    total += c; photos += Number(r.images);
+    byKind.set(k, (byKind.get(k) ?? 0) + c);
+    const s = byShop.get(r.business_id as string) ?? { cost: 0, photos: 0, calls: 0 };
+    s.cost += c; s.photos += Number(r.images); s.calls += Number(r.calls);
+    byShop.set(r.business_id as string, s);
+  }
+  const ids = [...byShop.keys()];
+  const { data: names } = await db.from('businesses').select('id, name').in('id', ids);
+  const nameOf = new Map((names ?? []).map((n) => [n.id as string, n.name as string]));
+  const top = [...byShop.entries()].sort((a, b) => b[1].cost - a[1].cost).slice(0, 10);
+  return reply(phone).text(
+    '📊 *AI cost, last 7 days* (estimates)',
+    `Total: *${ngn(Math.round(total))}* · ${photos} photos cleaned · ${byShop.size} shop${byShop.size > 1 ? 's' : ''} · average ${ngn(Math.round(total / byShop.size))} per shop`,
+    '',
+    ...top.map(([id, s], i) => `${i + 1}. ${nameOf.get(id) ?? 'Shop'}: ${ngn(Math.round(s.cost))} (${s.photos} photos, ${s.calls} AI calls)`),
+    '',
+    `By kind: ${[...byKind.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => `${k.replace('_', ' ')} ${ngn(Math.round(c))}`).join(' · ')}`,
+    '_Estimates from token counts; check Google AI Studio → Spend for the real number._',
   );
 }

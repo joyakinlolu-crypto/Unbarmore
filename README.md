@@ -115,7 +115,7 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - Service worker is now registered (it was built but never started before), so the offline page, fast reopen and alerts actually work.
 
 ## Trial & video cost controls
-- **Trial = 14 days** (`TRIAL_DAYS` in `src/config/plans.ts`; set in code when a business is created, so no SQL change). Trial gets **5 short videos**.
+- **Trial = 14 days** (`TRIAL_DAYS` in `src/config/plans.ts`; set in code when a business is created, so no SQL change). Trial gets **3 short videos** (cut from 5: photo cleanup is ~90% of the AI bill).
 - **Short "mini" videos** (`videoLength: 'mini'`) on the trial and free plans: ≤3 photos (fewer image-model calls, the biggest cost), a ~13-word script, ~9–11 s render, with a "Starter makes full HD ads" note. Paid plans keep the full 15–18 s ad. Tune in `PLANS` / `MINI_VIDEO`.
 - **Voiceover fix**: the speech model now receives only the words to speak. Before, an instruction sentence was read aloud ahead of every ad (and long scripts were cut off at the end). If a voice ever overruns, it is sped up (max 1.25×) rather than clipped.
 
@@ -153,3 +153,11 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 - Renders run **one at a time** (`VIDEO_CONCURRENCY`, default 1). Do not size it from `os.cpus()`: inside Railway/Docker that reports the host's cores, not the container's, and parallel ffmpegs get OOM-killed (SIGKILL → "video failed to render"). Raise it only after giving the service more RAM (~600 MB per render).
 - ffmpeg is capped to 2 threads; if it is still killed, `renderVideo` retries once in a low-memory mode.
 - Photos arriving up to 8 s apart count as one batch; later ones are added to the pending video (max 5) instead of replacing it.
+
+
+## Pricing protection (videos)
+- **Included videos:** trial 3 (previews, 2 photos), Starter 8 (3 photos), Growth 50. At most **2 included videos per shop per day** (`VIDEOS_PER_DAY`).
+- **Pay-as-you-go video credits** (any plan, trial too): ₦500 for 1, ₦1,200 for 3. A credit makes a full 15–18 s video (3 photos) with the small watermark and is **never** blocked by the daily limit. Owner commands: `BUY VIDEOS`. Until Paystack is live the request alerts the admin, who collects a transfer and sends `GRANT VIDEOS 08012345678 3`.
+- **Per-shop AI cost log** (migration 008): admin command `COSTS` = estimated naira per shop and per kind, last 7 days (estimates: compare with Google AI Studio → Spend). Prices live in `src/lib/aiCost.ts`.
+- **Cleaned photos are reused** when a video is remade from exactly the same uploaded photos (Yoruba/Pidgin versions): no second cleanup charge.
+- Dials without code changes: `VIDEO_MAX_PHOTOS_FULL` (3), `VIDEO_MAX_PHOTOS_MINI` (2), `USD_NGN` (1500, only for the cost estimate), `DISABLE_PHOTO_CLEANUP=true` (tests).

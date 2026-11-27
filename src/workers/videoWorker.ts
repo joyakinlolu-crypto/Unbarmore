@@ -5,11 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { env } from '../config/env.js';
 import { MINI_VIDEO, PLANS } from '../config/plans.js';
-import { db, downloadFile, getBusiness, getProduct, refundQuota, signedUrl, uploadFile } from '../db/supabase.js';
+import { db, downloadFile, getBusiness, getProduct, refundQuota, refundVideoCredit, signedUrl, uploadFile } from '../db/supabase.js';
+import { uncountVideoToday } from '../lib/videoDaily.js';
+import { reusableCleaned } from '../lib/cleanedReuse.js';
 import { QUEUE, redisConnection, type VideoJob } from '../lib/queues.js';
 import { ngn } from '../lib/money.js';
 import { displayPhone } from '../lib/phone.js';
 import { photosForVideo } from '../lib/videoPhotos.js';
+import { bindUsageToBusiness } from '../lib/usage.js';
 import { writeVideoScript, type VideoScript } from '../services/geminiBrain.js';
 import { enhanceProductPhoto, type StudioTheme } from '../services/imageStudio.js';
 import { synthesizeVoiceover } from '../services/ttsService.js';
@@ -220,6 +223,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
 
   await db.from('video_jobs').update({ status: 'processing' }).eq('id', videoId);
   const business = await getBusiness(businessId);
+  bindUsageToBusiness(businessId);
   const product = await getProduct(row.product_id as string);
   const plan = PLANS[business.subscription_tier];
   const theme: StudioTheme = plan.themes ? business.studio_theme : 'clean_minimalist';
@@ -227,10 +231,23 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
 
   try {
     // Step 1 — studio enhancement (parallel, keep originals on failure)
-    const mini = plan.videoLength === 'mini';
+    const funded = row.credit_funded === true;           // paid with a bought credit → full-length video, small watermark
+    const mini = !funded && plan.videoLength === 'mini';
     const raw = photosForVideo(row.raw_image_urls as string[], mini, { full: env.VIDEO_MAX_PHOTOS_FULL, mini: env.VIDEO_MAX_PHOTOS_MINI }); // fewer photos = fewer image-model calls = cheaper
     const cleanedPaths: string[] = [];
+    // A remake of the same photos (e.g. the Yoruba version) reuses the photos already cleaned for an earlier video: no second ~₦60 per photo.
+    const earlier = await priorCleaned(businessId, row.product_id as string, row.raw_image_urls as string[], videoId);
     const localImages = await Promise.all(raw.map(async (p, i) => {
+      if (earlier[i]) {
+        try {
+          const data = await downloadFile('cleaned-images', earlier[i]!);
+          const reusedExt = earlier[i]!.split('.').pop()?.toLowerCase() ?? 'png';
+          const reused = path.join(workDir, `img${i}.${reusedExt}`);
+          await fs.writeFile(reused, data);
+          cleanedPaths[i] = earlier[i]!;
+          return reused;
+        } catch { /* the file is gone: clean it again below */ }
+      }
       const data = await downloadFile('raw-images', p);
       const ext = p.split('.').pop()?.toLowerCase() ?? 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
@@ -241,7 +258,8 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
       if (enhanced.enhanced) cleanedPaths[i] = await uploadFile('cleaned-images', `${businessId}/${videoId}-${i}.${outExt}`, enhanced.data, enhanced.mimeType);
       return local;
     }));
-    await db.from('video_jobs').update({ cleaned_image_urls: cleanedPaths.filter(Boolean) }).eq('id', videoId);
+    // Keep the list ALIGNED with the photos ('' = used the original) so a later remake knows which photo each cleaned file belongs to.
+    await db.from('video_jobs').update({ cleaned_image_urls: Array.from({ length: raw.length }, (_, i) => cleanedPaths[i] ?? '') }).eq('id', videoId);
 
     // Step 2 — script + Nigerian voiceover
     const price = Number(product.selling_price_ngn) || null;
@@ -267,7 +285,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     const outPath = path.join(workDir, 'out.mp4');
     const { bytes } = await renderVideo({
       images: localImages, voiceover: voicePath, bgm: await pickBgm(), captions: script.captions.slice(0, 3),
-      priceText: price ? ngn(price) : null, contactPhone: shopPhone, watermark: row.include_watermark ? plan.watermark === 'none' ? 'subtle' : plan.watermark : 'none',
+      priceText: price ? ngn(price) : null, contactPhone: shopPhone, watermark: funded ? 'subtle' : row.include_watermark ? plan.watermark === 'none' ? 'subtle' : plan.watermark : 'none',
       clearance: row.is_clearance as boolean, mini, fontPath: path.resolve(env.FONT_PATH), outPath, workDir,
     });
 
@@ -296,13 +314,26 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
       String(err).split('\n')[0] ?? '', { key: `${videoId}:${job.attemptsMade}`, cooldownS: 3600 });
     void noteGeminiError('video', err);
     if (final) {
-      await refundQuota(businessId, 'videos_used_this_month');
-      await reply(phone).text(`😓 Your video for ${product.name} failed to render. It didn't count against your plan — send the photos again.`).send().catch(() => undefined);
+      const wasCredit = row.credit_funded === true;
+      if (wasCredit) await refundVideoCredit(businessId);
+      else { await refundQuota(businessId, 'videos_used_this_month'); await uncountVideoToday(businessId); }
+      await reply(phone).text(`😓 Your video for ${product.name} failed to render. It didn't ${wasCredit ? 'use up your video credit' : 'count against your plan'} — send the photos again.`).send().catch(() => undefined);
     }
     throw err;
   } finally {
     await fs.rm(workDir, { recursive: true, force: true });
   }
+}
+
+/** Cleaned photos from an earlier completed video of the same product made from exactly the same uploaded photos (else none). */
+async function priorCleaned(businessId: string, productId: string, rawUrls: string[], thisVideoId: string): Promise<string[]> {
+  try {
+    const { data } = await db.from('video_jobs').select('raw_image_urls, cleaned_image_urls')
+      .eq('business_id', businessId).eq('product_id', productId).eq('status', 'completed').neq('id', thisVideoId)
+      .order('created_at', { ascending: false }).limit(5);
+    return reusableCleaned(rawUrls, (data ?? []).map((j) => ({ raw: (j.raw_image_urls as string[] | null) ?? [], cleaned: (j.cleaned_image_urls as string[] | null) ?? [] })));
+  } catch { /* no reuse: clean them again */ }
+  return [];
 }
 
 export function startVideoWorker() {

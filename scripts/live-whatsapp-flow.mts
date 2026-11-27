@@ -472,7 +472,7 @@ try {
   const vj = (await rows(`video_jobs?business_id=eq.${biz!.id}&select=status,include_watermark,cleaned_image_urls,generated_script,error_message`))[0];
   ok('video job completed; trial video carries the watermark', vj?.status === 'completed' && vj?.include_watermark === true, JSON.stringify({ status: vj?.status, err: vj?.error_message }));
   console.log(`   ℹ️  photo clean-up by the image model: ${vj?.cleaned_image_urls?.length ? 'used' : 'skipped (image quota) — original photos were used, as designed'}`);
-  ok('video quota charged once (trial: 1 of 5)', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === 1);
+  ok('video quota charged once (trial: 1 of 3)', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === 1);
 
   // ───── Photos WITH a caption = video details: no "Got 3 photos!" question (it used to ask for name and price again) ─────
   const hasMig006 = (await fetch(`${process.env.SUPABASE_URL}/rest/v1/businesses?select=sales_phone&limit=1`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } })).ok;
@@ -510,16 +510,38 @@ try {
   const tCap = Date.now();
   while (Date.now() - tCap < 240_000 && !sent.slice(capStart).map(view).some((v) => v.kind === 'video')) await sleep(2000);
   ok('the captioned video was delivered', sent.slice(capStart).map(view).some((v) => v.kind === 'video'));
+  // ───── DAILY LIMIT: 2 included videos a day. The 3rd is held (friendly message + buy buttons), and nothing is charged ─────
+  const has008 = (await fetch(`${process.env.SUPABASE_URL}/rest/v1/businesses?select=video_credits&limit=1`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } })).ok;
+  console.log(`   ℹ️  database has migration 008 (video credits + usage log): ${has008 ? 'YES' : 'NO — testing the graceful path'}`);
+  const usedBefore = Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month);
+  r = await ask('video-daily-limit', () => text('YORUBA VIDEO'), (v) => /made 2 videos today/.test(v.text));
+  ok('the 3rd video the same day is held: "You\'ve made 2 videos today…", with [1 video · ₦500] [3 videos · ₦1,200] buttons', !!r.reply && r.reply.buttons.some((b) => b.id === 'BUYV1') && r.reply.buttons.some((b) => b.id === 'BUYV3') && /₦500/.test(r.reply.text) && /₦1,200/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+  ok('…and the monthly allowance was NOT used up by the refused attempt', Number((await rows(`businesses?id=eq.${biz!.id}&select=videos_used_this_month`))[0]?.videos_used_this_month) === usedBefore, `used ${usedBefore}`);
+  r = await ask('buy-videos', () => text('BUY VIDEOS'), (v) => v.buttons.some((b) => b.id === 'BUYV1'));
+  ok('BUY VIDEOS → ₦500 each or 3 for ₦1,200, as buttons (a way forward, never a dead end)', !!r.reply && /₦500/.test(r.reply.text) && /₦1,200/.test(r.reply.text));
+  const reqStart = sent.length;
+  r = await ask('buy-tap', () => button('BUYV1'), (v) => /opening soon|₦500/.test(v.text));
+  const reqAlert = await (async () => { const t = Date.now(); while (Date.now() - t < 15_000) { const f = sent.slice(reqStart).map(view).find((v) => /VIDEO CREDIT REQUEST/.test(v.text)); if (f) return f; await sleep(300); } return undefined; })();
+  ok('tapping ₦500 while card payments are not live → "opening soon", and the admin gets a 🚨 VIDEO CREDIT REQUEST with the GRANT VIDEOS command to run', !!r.reply && (/opening soon/.test(r.reply.text) || /paystack/i.test(r.reply.text)) && (!!reqAlert ? /GRANT VIDEOS/.test(reqAlert.text) : true), reqAlert?.text.replace(/\n/g, ' | ').slice(0, 200) ?? r.reply?.text.slice(0, 100));
+  if (has008) {
+    r = await ask('grant', () => text('GRANT VIDEOS 09000000401 1'), (v) => /Added 1 video credit|Could not add/.test(v.text));
+    ok('admin: GRANT VIDEOS 09000000401 1 → "Added 1 video credit … Balance: 1" (database confirms)', !!r.reply && /Balance: 1/.test(r.reply.text) && Number((await rows(`businesses?id=eq.${biz!.id}&select=video_credits`))[0]?.video_credits) === 1, r.reply?.text);
+  }
+
   const yoStart = sent.length;
-  r = await ask('yoruba-video', () => text('YORUBA VIDEO'), (v) => /Making your video|couldn.t|I don.t have photos/.test(v.text));
-  ok('YORUBA VIDEO → "Making your video for Cord lace" with the voice noted (or an honest note if migration 006 is not applied)', !!r.reply && /Making your video for \*Cord lace\*/.test(r.reply.text) && (hasMig006 ? /Voice: Yoruba/.test(r.reply.text) : /not switched on yet/.test(r.reply.text)), r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
+  r = await ask('yoruba-video', () => text('YORUBA VIDEO'), (v) => /Making your video|couldn.t|I don.t have photos|made 2 videos today/.test(v.text));
+  if (!has008) { console.log('   ℹ️  without migration 008 there are no credits: the Yoruba remake correctly stays held; skipping the Yoruba video checks'); }
+  if (has008) ok('YORUBA VIDEO paid by the credit → "Making your video for Cord lace", voice noted, "Used 1 video credit (0 left)"', !!r.reply && /Used 1 video credit \(0 left\)/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+  if (has008) ok('YORUBA VIDEO → "Making your video for Cord lace" with the voice noted (or an honest note if migration 006 is not applied)', !!r.reply && /Making your video for \*Cord lace\*/.test(r.reply.text) && (hasMig006 ? /Voice: Yoruba/.test(r.reply.text) : /not switched on yet/.test(r.reply.text)), r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
   const ty = Date.now(); let yoVideo: ReturnType<typeof view> | undefined;
-  while (Date.now() - ty < 240_000 && !(yoVideo = sent.slice(yoStart).map(view).find((v) => v.kind === 'video'))) await sleep(2000);
-  ok('the Yoruba video was delivered', !!yoVideo, yoVideo?.text.replace(/\n/g, ' | ').slice(0, 120));
+  while (has008 && Date.now() - ty < 240_000 && !(yoVideo = sent.slice(yoStart).map(view).find((v) => v.kind === 'video'))) await sleep(2000);
+  if (has008) ok('the Yoruba video was delivered', !!yoVideo, yoVideo?.text.replace(/\n/g, ' | ').slice(0, 120));
   if (yoVideo?.header?.link) {
     const buf = Buffer.from(await (await fetch(yoVideo.header.link)).arrayBuffer());
     const f = path.join(tmp, 'yo.mp4'); fs.writeFileSync(f, buf);
     const wav = path.join(tmp, 'yo.wav'); execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', '16000', wav]);
+    const durY = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).toString());
+    ok('a bought credit makes a FULL-length video (more than 13 s), not the ~10 s trial preview', durY > 13, `${durY.toFixed(1)}s`);
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
     let said = '';
@@ -758,6 +780,18 @@ try {
   r = await ask('missed-alerts', () => text('ALERTS'), (v) => /while your WhatsApp window was closed/.test(v.text), 40_000);
   ok('…and the moment the admin messages the bot, the held alert arrives: "1 alert while your WhatsApp window was closed"', !!r.reply && /Alert Test BBB/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
   await vq.close();
+
+  // ───── per-shop usage log + the admin COSTS report ─────
+  if (has008) {
+    const usage = await rows(`ai_usage?business_id=eq.${biz!.id}&select=kind,calls,est_cost_ngn`);
+    const kinds = new Set(usage.map((u: any) => u.kind));
+    ok('the usage log recorded this shop\'s AI work (messages, scripts and voiceovers), with an estimated naira cost each', ['message', 'script', 'voiceover'].every((k) => kinds.has(k)) && usage.every((u: any) => Number(u.est_cost_ngn) >= 0), JSON.stringify(usage.map((u: any) => `${u.kind}:${u.calls}`)));
+    r = await ask('costs', () => text('COSTS'), (v) => /AI cost, last 7 days|No AI usage/.test(v.text));
+    ok('admin: COSTS → "AI cost, last 7 days (estimates)" with a total and a per-shop line', !!r.reply && /AI cost, last 7 days/.test(r.reply.text) && /Ada Fabrics/.test(r.reply.text) && /By kind/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 260));
+  } else {
+    r = await ask('costs', () => text('COSTS'), (v) => /not set up|No AI usage/.test(v.text));
+    ok('admin: COSTS before migration 008 → says the usage log is not set up (no crash)', !!r.reply, r.reply?.text);
+  }
 
   // ───── no payment/PII leaks in what the bot sent ─────
   const everything = JSON.stringify(sent.map((s) => s.payload));

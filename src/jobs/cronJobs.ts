@@ -41,7 +41,7 @@ async function hourly(): Promise<void> {
         .text(
           `⏰ Your ${TRIAL_DAYS}-day trial has ended — but you are *not* locked out.`,
           'You keep: 1 video/month · 20 text/SMS messages · 3 PDF receipts.',
-          'Starter (₦5k/mo) unlocks voice notes, fake-alert checks, 15 videos and the Sunday CEO report.',
+          `Starter (₦5k/mo) unlocks voice notes, fake-alert checks, ${PLANS.starter_5k.videos_used_this_month} videos and the Sunday CEO report.`,
         )
         .button('PLANS', '⭐ See plans')
         .send()

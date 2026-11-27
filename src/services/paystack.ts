@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
-import { PRICES_NGN, REFERRAL } from '../config/plans.js';
-import { db, getBusiness, type Business } from '../db/supabase.js';
+import { PRICES_NGN, REFERRAL, packByQty } from '../config/plans.js';
+import { addVideoCredits, db, getBusiness, type Business } from '../db/supabase.js';
 
 const API = 'https://api.paystack.co';
 type PaidTier = 'starter_5k' | 'growth_15k';
@@ -80,6 +80,20 @@ export async function createCheckoutLink(b: Business, tier: PaidTier, interval: 
   return { url: data.authorization_url, amountNgn, walletApplied: Math.max(0, walletApplied) };
 }
 
+/** One-off charge for pay-as-you-go video credits (no subscription plan involved). */
+export async function createVideoCreditCheckout(b: Business, qty: number, amountNgn: number): Promise<{ url: string; amountNgn: number }> {
+  if (!paymentsLive()) throw new PaymentsNotLiveError();
+  const data = await paystack<{ authorization_url: string }>('/transaction/initialize', {
+    email: syntheticEmail(b),
+    amount: amountNgn * 100, // kobo
+    currency: 'NGN',
+    channels: ['card', 'bank_transfer', 'ussd', 'bank'],
+    callback_url: `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent('I have paid')}`,
+    metadata: { business_id: b.id, kind: 'video_credits', qty, custom_fields: [{ display_name: 'Business', variable_name: 'business', value: b.name }] },
+  });
+  return { url: data.authorization_url, amountNgn };
+}
+
 // ───────────── Webhook processing ─────────────
 
 interface PaystackEvent {
@@ -91,9 +105,12 @@ interface PaystackEvent {
     customer?: { email?: string; customer_code?: string };
     plan?: { plan_code?: string } | Record<string, never>;
     subscription_code?: string;
-    metadata?: { business_id?: string; tier?: PaidTier; interval?: Interval; wallet_applied?: number } | string | null;
+    metadata?: { business_id?: string; tier?: PaidTier; interval?: Interval; wallet_applied?: number; kind?: string; qty?: number } | string | null;
   };
 }
+
+/** A pay-as-you-go video purchase was applied. */
+export interface CreditOutcome { kind: 'video_credits'; business: Business; qty: number; balance: number; amountNgn: number }
 
 export interface PaymentOutcome {
   business: Business;
@@ -121,7 +138,7 @@ async function resolveBusinessId(e: PaystackEvent): Promise<string | null> {
 }
 
 /** Idempotent. Returns an outcome only the first time a successful charge is applied. */
-export async function handlePaystackEvent(e: PaystackEvent): Promise<PaymentOutcome | null> {
+export async function handlePaystackEvent(e: PaystackEvent): Promise<PaymentOutcome | CreditOutcome | null> {
   const reference = e.data.reference ?? e.data.subscription_code ?? crypto.createHash('sha1').update(JSON.stringify(e)).digest('hex');
   const businessId = await resolveBusinessId(e);
   const amountNgn = (e.data.amount ?? 0) / 100;
@@ -152,6 +169,20 @@ export async function handlePaystackEvent(e: PaystackEvent): Promise<PaymentOutc
   if (e.event !== 'charge.success' || e.data.status !== 'success') return null;
 
   const meta = typeof e.data.metadata === 'object' && e.data.metadata ? e.data.metadata : {};
+
+  // Pay-as-you-go video credits. Idempotent already (billing_events insert above returns only the first delivery).
+  if (meta.kind === 'video_credits') {
+    const qty = Number(meta.qty);
+    const pack = packByQty(qty);
+    // The amount paid must match the pack: a tampered or underpaid charge gets nothing.
+    if (!pack || Math.abs(amountNgn - pack.ngn) > 1) {
+      console.error('[paystack] video credit charge does not match a pack', { reference, qty, amountNgn });
+      return null;
+    }
+    const balance = await addVideoCredits(businessId, pack.qty);
+    return { kind: 'video_credits', business: await getBusiness(businessId), qty: pack.qty, balance, amountNgn };
+  }
+
   const plan = (meta.tier && meta.interval ? { tier: meta.tier, interval: meta.interval } : null)
     ?? planFromCode((e.data.plan as { plan_code?: string } | undefined)?.plan_code);
   if (!plan) return null; // not a subscription charge

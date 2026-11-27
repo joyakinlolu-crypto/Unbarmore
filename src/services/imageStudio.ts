@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { GoogleGenAI } from '@google/genai';
 import { noteGeminiError } from '../lib/alerts.js';
+import { recordUsage } from '../lib/usage.js';
 
 // Image generation (responseModalities/imageConfig) is only on the v1beta API surface; the SDK default is v1.
 const genai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY, httpOptions: { apiVersion: 'v1beta' } });
@@ -41,6 +42,7 @@ export async function enhanceProductPhoto(
       contents: [{ role: 'user', parts: [{ inlineData: { mimeType: image.mimeType, data: image.data.toString('base64') } }, { text: PROMPT(theme) }] }],
       config: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '9:16' } },
     });
+    recordUsage('photo_cleanup', res.usageMetadata as never, { images: 1 });
     const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
     if (!part?.inlineData?.data) throw new Error('no image returned');
     return { data: Buffer.from(part.inlineData.data, 'base64'), mimeType: part.inlineData.mimeType ?? 'image/png', enhanced: true };

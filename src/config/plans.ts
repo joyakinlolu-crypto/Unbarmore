@@ -22,7 +22,7 @@ export interface PlanCaps {
 
 export const PLANS: Record<Tier, PlanCaps> = {
   trial: {
-    videos_used_this_month: 5, tx_logged_this_month: 20, ocr_scans_used_this_month: 10, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: 1,
+    videos_used_this_month: 3, tx_logged_this_month: 20, ocr_scans_used_this_month: 10, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: 1,
     voiceNotes: true, watermark: 'full', videoLength: 'mini', themes: true, dailyCheckin: true, inflationShield: true,
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
@@ -32,7 +32,7 @@ export const PLANS: Record<Tier, PlanCaps> = {
     outboundCeoTemplate: false, maxStaff: 0, sheetsSync: false,
   },
   starter_5k: {
-    videos_used_this_month: 15, tx_logged_this_month: 250, ocr_scans_used_this_month: 150, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
+    videos_used_this_month: 8, tx_logged_this_month: 250, ocr_scans_used_this_month: 150, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
     voiceNotes: true, watermark: 'subtle', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true,
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
@@ -56,6 +56,20 @@ export const PRICES_NGN = {
   starter_5k: { monthly: 5_000, annual: 50_000 },
   growth_15k: { monthly: 15_000, annual: 150_000 },
 } as const;
+
+/**
+ * Included videos a shop can make per day. Applies to videos that come with the plan; a bought video credit is never blocked by it
+ * (someone who pays for a video should get it). Protects the AI bill from one afternoon of regenerating.
+ */
+export const VIDEOS_PER_DAY = 2;
+
+/** Pay-as-you-go extra videos. Each credit = one full 15–18 s HD video (3 photos), with the small watermark. Works on trial and paid plans. */
+export const VIDEO_CREDIT_PACKS = {
+  BUYV1: { qty: 1, ngn: 500, label: '1 video · ₦500' },
+  BUYV3: { qty: 3, ngn: 1_200, label: '3 videos · ₦1,200' },
+} as const;
+export type VideoPackId = keyof typeof VIDEO_CREDIT_PACKS;
+export const packByQty = (qty: number) => Object.values(VIDEO_CREDIT_PACKS).find((p) => p.qty === qty) ?? null;
 
 export const METRIC_LABEL: Record<Metric, string> = {
   videos_used_this_month: 'sales videos',

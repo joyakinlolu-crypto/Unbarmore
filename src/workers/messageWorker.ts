@@ -29,8 +29,10 @@ import { createOwnerMagicLink } from '../services/webLink.js';
 import { withInterimNotice } from '../lib/interim.js';
 import { displayPhone } from '../lib/phone.js';
 import { alertAdmin, classifyGeminiError } from '../lib/alerts.js';
+import { bindUsageToBusiness } from '../lib/usage.js';
 import { extractBusinessName, looksLikeBusinessName } from '../lib/businessName.js';
 import { adminAlertCommand, deleteDataRequest, missedAlertsReply } from '../flows/adminAlerts.js';
+import { startCreditPurchase, videoLimitReply } from '../flows/videoCredits.js';
 import { closeShopReply } from '../flows/close.js';
 import { AWAIT_LOGO_KEY, AWAIT_LOGO_TTL_S, logoAskReply, saveLogo, useNameAsLogo } from '../flows/branding.js';
 import { customerReceiptReply, latestReceiptBatch } from '../flows/receipts.js';
@@ -122,6 +124,7 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   let session = await getSession(phone);
 
   if (!actor) return onboarding(msg, session, profileName);
+  bindUsageToBusiness(actor.business.id); // from here on, AI work is attributed to this shop in the usage log
 
   // The owner asked to set a logo and is now sending it: this photo is the logo, not a product shot.
   const photoId = msg.type === 'image' ? msg.image?.id : msg.type === 'document' && msg.document?.mime_type?.startsWith('image/') ? msg.document.id : null;
@@ -370,7 +373,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     if (!link) return paymentsSoonReply(actor.phone);
     return reply(actor.phone).text(
       `Tap to pay *${ngn(link.amountNgn)}*${link.walletApplied ? ` (${ngn(link.walletApplied)} wallet applied)` : ''} for Starter — card, transfer or USSD:`,
-      link.url, '', 'Unlimited CFO chat + 15 videos + voice notes + fake-alert checks. Activates the moment payment lands. ✅',
+      link.url, '', `Unlimited CFO chat + ${PLANS.starter_5k.videos_used_this_month} videos + voice notes + fake-alert checks. Activates the moment payment lands. ✅`,
     );
   }
   if (upper === 'SUPPORT') return supportReply(actor.phone);
@@ -388,6 +391,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     await updateBusiness(actor.business.id, { name: newName });
     return reply(actor.phone).text(`✅ Done. Your business is now *${newName}*. It shows on new receipts and in your app.`);
   }
+  if (/^(?:buy|get|more|extra)\s+(?:extra\s+)?videos?$|^video credits?$|^extra videos?$/i.test(t) && !actor.isStaff) return videoLimitReply(actor, 'ask');
   const num = t.match(/^(?:my|sales|shop|video) (?:whatsapp )?number(?:\s+(.+))?$/i);
   if (num && !actor.isStaff) return setSalesNumber(actor, num[1]?.trim());
   if (upper === 'LOGO' && !actor.isStaff) { await redis.set(AWAIT_LOGO_KEY(actor.phone), '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
@@ -490,7 +494,7 @@ function helpMenu(actor: Actor): Reply {
     '🧾 Transfer screenshot → fake-alert check',
     '❓ Ask: "who owes me?", "profit this week"',
     '💬 Paste a customer\'s "too cost" → closing replies',
-    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo) · MY NUMBER (the number shown on your videos) · RENAME BUSINESS (change your business name)',
+    '👥 MY CLIENTS · WIN BACK (customers who stopped buying) · LOGO (your receipt logo) · BUY VIDEOS (extra videos, from ₦500) · MY NUMBER (the number shown on your videos) · RENAME BUSINESS (change your business name)',
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
@@ -506,7 +510,7 @@ function plansMenu(actor: Actor): Reply {
       '*Unbarmore plans*',
       `⭐ Starter — ${ngn(PRICES_NGN.starter_5k.monthly)}/mo or ${ngn(PRICES_NGN.starter_5k.annual)}/yr (2 months free)`,
       '🎙️ *Speak a full day\'s sales & expenses in one voice note* — I split it into every sale, expense and debt. One voice note = 1 of your 250 messages.',
-      '15 HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor',
+      `${PLANS.starter_5k.videos_used_this_month} HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor`,
       '',
       `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
       '50 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
@@ -545,6 +549,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     }
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
+    case 'BUYV1': case 'BUYV3': return actor.isStaff ? reply(actor.phone).text('Only the owner can buy video credits.') : startCreditPurchase(actor, kind);
     case 'PLANS': return plansMenu(actor);
     case 'PAY': {
       const tier = a as 'starter_5k' | 'growth_15k';
@@ -747,6 +752,7 @@ export async function flushImageBatch(phone: string): Promise<void> {
 
   const actor = await resolveActor(phone);
   if (!actor) return;
+  bindUsageToBusiness(actor.business.id);
   const caption = items.map((i) => i.caption).filter(Boolean).join(' ');
   const images = await Promise.all(items.slice(0, 5).map((i) => downloadMedia(i.mediaId)));
 

@@ -340,7 +340,7 @@ export function quotaReply(actor: Actor, metric: keyof typeof QUOTA_MSG): Reply 
 
 export const QUOTA_MSG = {
   tx_logged_this_month: (t: string) => `You've used all your logged messages for this ${t === 'trial' ? 'trial' : 'month'}. Starter (₦5k/mo) gives you 250 — each message can hold as many sales and expenses as you like.`,
-  videos_used_this_month: (t: string) => `You've used your ${t === 'trial' ? 'trial' : 'monthly'} videos. Starter gives you 15 HD sales videos/month — one new ad every 2 days.`,
+  videos_used_this_month: (t: string) => `You've used your ${t === 'trial' ? 'trial' : 'monthly'} videos. Starter gives you ${PLANS.starter_5k.videos_used_this_month} HD sales videos/month, and you can add extra videos any time (₦500 each).`,
   ocr_scans_used_this_month: (t: string) => t === 'free_limited'
     ? 'Screenshot checking is on paid plans. One fake alert costs more than a year of Starter (₦5k/mo).'
     : 'You\'ve used your screenshot checks for this period. Upgrade for more.',

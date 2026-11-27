@@ -1,9 +1,11 @@
-import { PLANS } from '../config/plans.js';
-import { consumeQuota, db, upsertProduct, type Actor, type Business } from '../db/supabase.js';
+import { PLANS, VIDEOS_PER_DAY } from '../config/plans.js';
+import { consumeQuota, consumeVideoCredit, db, refundQuota, refundVideoCredit, upsertProduct, type Actor, type Business } from '../db/supabase.js';
+import { allocateVideo } from '../lib/videoAllocation.js';
+import { countVideoToday, uncountVideoToday, videosToday } from '../lib/videoDaily.js';
+import { videoLimitReply } from './videoCredits.js';
 import { videoQueue, type VideoJob } from '../lib/queues.js';
 import { ngn } from '../lib/money.js';
 import { reply, type Reply } from '../services/whatsapp.js';
-import { quotaReply } from './ledger.js';
 import type { Voice } from '../lib/videoCaption.js';
 import { env } from '../config/env.js';
 
@@ -12,14 +14,29 @@ export async function startVideo(
   actor: Actor,
   p: { productName: string; priceNgn: number | null; deliveryInfo: string | null; rawPaths: string[]; clearance?: boolean; pidgin?: boolean; voice?: Voice },
 ): Promise<Reply> {
-  if (!(await consumeQuota(actor.business, 'videos_used_this_month'))) return quotaReply(actor, 'videos_used_this_month');
+  // Which wallet pays: an included video (max VIDEOS_PER_DAY a day), else a bought credit, else a friendly "here's how to get more".
+  const b = actor.business;
+  const hasIncludedLeft = Number(b.videos_used_this_month ?? 0) < PLANS[b.subscription_tier].videos_used_this_month;
+  const alloc = await allocateVideo({
+    dailyLimit: VIDEOS_PER_DAY,
+    usedToday: () => videosToday(b.id),
+    consumeIncluded: () => consumeQuota(b, 'videos_used_this_month'),
+    countToday: () => countVideoToday(b.id),
+    consumeCredit: () => consumeVideoCredit(b.id),
+  }, hasIncludedLeft);
+  if (alloc.source === 'none') return videoLimitReply(actor, alloc.reason);
+  const funded = alloc.source === 'credit';
+  const giveBack = async () => { // nothing was queued: return exactly what was taken
+    if (funded) await refundVideoCredit(b.id); else { await refundQuota(b.id, 'videos_used_this_month'); await uncountVideoToday(b.id); }
+  };
 
-  const product = await upsertProduct(actor.business.id, p.productName);
+  let product;
+  try { product = await upsertProduct(actor.business.id, p.productName); } catch (e) { await giveBack(); throw e; }
   if (p.priceNgn && !p.clearance) {
     await db.from('products').update({ selling_price_ngn: p.priceNgn, updated_at: new Date().toISOString() }).eq('id', product.id);
   }
   const plan = PLANS[actor.business.subscription_tier];
-  const isMiniPlan = plan.videoLength === 'mini';
+  const isMiniPlan = !funded && plan.videoLength === 'mini';
   const wanted = p.voice ?? (p.pidgin ? 'pidgin' : 'english');
   const insertJob = (voiceLanguage: string) => db.from('video_jobs').insert({
     business_id: actor.business.id,
@@ -29,6 +46,7 @@ export async function startVideo(
     is_clearance: !!p.clearance,
     delivery_info: p.deliveryInfo,
     voice_language: voiceLanguage,
+    ...(funded ? { credit_funded: true } : {}), // a bought credit = a full-length video (migration 008)
   }).select('id').single();
   let { data, error } = await insertJob(wanted === 'yoruba' ? 'yoruba' : wanted === 'pidgin' ? 'pidgin' : 'en-NG');
   let note: string | null = null;
@@ -38,7 +56,7 @@ export async function startVideo(
     ({ data, error } = await insertJob('en-NG'));
     note = '⚠️ The Yoruba voice is not switched on yet, so this video is in English.';
   }
-  if (error || !data) throw new Error(`video_jobs insert: ${error?.message}`);
+  if (error || !data) { await giveBack(); throw new Error(`video_jobs insert: ${error?.message}`); }
 
   const job: VideoJob = { videoId: data.id as string, businessId: actor.business.id, phone: actor.phone };
   await videoQueue.add('render', job, { jobId: `video-${data.id}` });
@@ -49,6 +67,7 @@ export async function startVideo(
     ...(wanted === 'yoruba' && !note ? ['🗣️ Voice: Yoruba'] : []),
     ...(note ? [note] : []),
     ...(p.rawPaths.length > (isMiniPlan ? env.VIDEO_MAX_PHOTOS_MINI : env.VIDEO_MAX_PHOTOS_FULL) ? [`📸 I'll use your best ${isMiniPlan ? env.VIDEO_MAX_PHOTOS_MINI : env.VIDEO_MAX_PHOTOS_FULL} photos (the first ones you sent).`] : []),
+    ...(funded ? [`🎟️ Used 1 video credit (${Math.max(0, Number(b.video_credits ?? 1) - 1)} left).`] : []),
     'It arrives here in about 2 minutes. Keep selling! 💪',
   );
 }

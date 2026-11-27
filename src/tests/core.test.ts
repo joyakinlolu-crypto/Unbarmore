@@ -39,7 +39,7 @@ describe('webhook signatures', () => {
 describe('plan caps match the spec', () => {
   it('trial', () => {
     const t = PLANS.trial;
-    expect([t.videos_used_this_month, t.tx_logged_this_month, t.ocr_scans_used_this_month, t.pdf_receipts_used_this_month, t.ceo_reports_used_this_month]).toEqual([5, 20, 10, -1, 1]);   // pilot: 5 short videos over the 14-day trial (was 2 full ones)
+    expect([t.videos_used_this_month, t.tx_logged_this_month, t.ocr_scans_used_this_month, t.pdf_receipts_used_this_month, t.ceo_reports_used_this_month]).toEqual([3, 20, 10, -1, 1]);   // pilot: 3 (was 5: photo cleanup is ~90% of the AI bill) short videos over the 14-day trial (was 2 full ones)
   });
   it('trial lasts 14 days; short (~10 s) videos on the free tiers, full HD on paid', () => {
     expect(TRIAL_DAYS).toBe(14);
@@ -55,7 +55,7 @@ describe('plan caps match the spec', () => {
     expect(f.outboundCeoTemplate).toBe(false);
   });
   it('starter and growth', () => {
-    expect([PLANS.starter_5k.videos_used_this_month, PLANS.starter_5k.tx_logged_this_month, PLANS.starter_5k.ocr_scans_used_this_month]).toEqual([15, 250, 150]);
+    expect([PLANS.starter_5k.videos_used_this_month, PLANS.starter_5k.tx_logged_this_month, PLANS.starter_5k.ocr_scans_used_this_month]).toEqual([8, 250, 150]);
     expect([PLANS.growth_15k.videos_used_this_month, PLANS.growth_15k.tx_logged_this_month, PLANS.growth_15k.ocr_scans_used_this_month, PLANS.growth_15k.maxStaff]).toEqual([50, -1, 500, 10]);
     expect(PLANS.growth_15k.watermark).toBe('none');
   });
