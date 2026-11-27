@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { env } from '../config/env.js';
 import { ADVICE_PER_DAY, PLANS, PRICES_NGN, TRIAL_DAYS } from '../config/plans.js';
 import {
-  addStaff, claimMessageId, findBusinessByReferralCode, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
+  addStaff, claimMessageId, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
   resolveActor, setSession, undoBatch, updateBusiness, uploadFile, consumeQuota, createBusiness, debtors,
   type Actor, type Session,
 } from '../db/supabase.js';
@@ -15,14 +15,18 @@ import { generateStructured, readBankAlert, routeMessage, type BrainResult } fro
 import { connectSheet, extractSheetId, SHEETS_SERVICE_EMAIL } from '../services/googleSheets.js';
 import { createCheckoutLink, paymentsLive, PaymentsNotLiveError } from '../services/paystack.js';
 import { pendingPayout } from '../services/payouts.js';
-import { adminPayoutCommand, adminTarget, maskAccount, PAYOUT_DETAILS_TTL_MS, submitPayout, withdrawStart } from '../flows/payouts.js';
-import { REFERRAL, WITHDRAW_MIN_REFERRALS } from '../config/plans.js';
+import { adminPayoutCommand, adminTarget, maskAccount, PAYOUT_DETAILS_TTL_MS, setRenewalCredit, submitPayout, withdrawStart } from '../flows/payouts.js';
+import { REFERRAL } from '../config/plans.js';
 import { downloadMedia, markReadWithTyping, reply, type Reply, type WaInboundMessage } from '../services/whatsapp.js';
 import { answerQuery } from '../flows/insights.js';
 import {
   acceptMarginShield, bankAlertReply, confirmAndRespond, discardPending, linesToDrafts, MAX_LINES_PER_MESSAGE, proposeBatch, quotaReply, undoAndRespond,
 } from '../flows/ledger.js';
 import { chaseDebtsReply, deadStockPromoReply, statementReply } from '../flows/reports.js';
+import { linkReferrer, lookupReferrer, REF_CODE_RE } from '../flows/referral.js';
+import { parseChaseCommand, parsePromise } from '../lib/debtReminders.js';
+import { recordPromise } from '../flows/promises.js';
+import { occurredAt } from '../lib/sentAt.js';
 import { remakeLastVideo, startVideo } from '../flows/video.js';
 import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.js';
 import { createOwnerMagicLink } from '../services/webLink.js';
@@ -181,13 +185,13 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
         .button('PLANS', '⭐ See plans');
     }
     const audio = await downloadMedia(msg.audio.id);
-    return runBrain(actor, { audio }, session);
+    return runBrain(actor, { audio, sentAt: occurredAt(msg.timestamp) }, session);
   }
   if (msg.type === 'document' && msg.document?.mime_type?.startsWith('image/')) {
     const image = await downloadMedia(msg.document.id);
     return runBrain(actor, { image: { ...image, caption: msg.document.caption } }, session);
   }
-  if (text) return runBrain(actor, { text }, session);
+  if (text) return runBrain(actor, { text, sentAt: occurredAt(msg.timestamp) }, session);
 
   // A reaction (👍 on a message) is not a request: replying would spam the owner and cost a WhatsApp conversation.
   if (msg.type === 'reaction') return null;
@@ -204,29 +208,25 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   return reply(phone).text('I can read text, voice notes and photos. Try: _"sold 3 Ankara 45k cash"_');
 }
 
-// ═════════════════════════ ONBOARDING (2 steps, zero catalogue) ═════════════════════════
+// ═════════════════════════ ONBOARDING (name → who referred you → what hurts most) ═════════════════════════
 
-const REF_RE = /\bUNBAR-[A-Z2-9]{4}\b/i;
+const REF_RE = REF_CODE_RE;
 
 async function onboarding(msg: WaInboundMessage, session: Session, profileName: string | null): Promise<Reply> {
   const phone = msg.from;
   const text = msg.text?.body?.trim() ?? '';
-  const button = msg.interactive?.button_reply?.id;
 
   // Staff number not yet added, or an ex-staff of a downgraded business.
   if (session.current_state === 'IDLE' || !['ONBOARDING_NAME', 'ONBOARDING_REFERRAL'].includes(session.current_state)) {
-    // Referral deep link: wa.me/<bot>?text=Hi%20UNBAR-XXXX — capture it so step 2 is skipped.
+    // Referral deep link: wa.me/<bot>?text=Hi%20UNBAR-XXXX — capture it so the "who referred you" step is skipped.
     const code = text.match(REF_RE)?.[0]?.toUpperCase() ?? null;
     await setSession(phone, 'ONBOARDING_NAME', { referral_code: code });
     return reply(phone).text(
-      `👋 Welcome to *Unbarmore*${profileName ? `, ${profileName.split(' ')[0]}` : ''}! I'm your pocket business manager on WhatsApp:`,
-      '💰 Track sales, expenses and who owes you. Just talk or send a voice note.',
-      '🎬 Turn product photos into sales videos.',
-      '🛡️ Check transfer alerts for fakes.',
-      '💬 Answer your business questions.',
+      `👋 Welcome to *Unbarmore*${profileName ? `, ${profileName.split(' ')[0]}` : ''}!`,
+      'I help shop owners *get paid faster, see their real profit and sell more*, all inside WhatsApp. No forms, no app to learn.',
       '',
-      code ? `🎁 Referral code ${code} saved — you both get ₦1,000 when you subscribe.` : '',
-      '*What is your business name?*',
+      code ? '🎁 Your friend\'s referral is saved.' : '',
+      '*What is your business name?* (the short name your customers know)',
     );
   }
 
@@ -236,48 +236,93 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
     const biz = await createBusiness(phone, name, profileName);
     const savedCode = (session.pending_payload.referral_code as string | null) ?? null;
     if (savedCode) {
-      const ok = await applyReferral(biz.id, savedCode);
+      const found = await lookupReferrer(savedCode, biz.id, phone);
+      const referrer = found.kind === 'found' ? await linkReferrer(biz, found.referrer.id) : null;
       await setSession(phone, 'IDLE', {}, biz.id);
-      return welcomeDone(phone, name, biz.referral_code, ok ? savedCode : null, biz.id);
+      return welcomeDone(phone, name, referrer?.name ?? null);
     }
     await setSession(phone, 'ONBOARDING_REFERRAL', {}, biz.id);
     return reply(phone)
-      .text(`✅ *${name}* is set up. Your ${TRIAL_DAYS}-day free trial has started.`, '', 'Did someone refer you? Type their code (e.g. UNBAR-7K2P) or tap Skip.')
+      .text(`✅ *${name}* is set up. Your ${TRIAL_DAYS}-day free trial has started.`, '', '*Who told you about Unbarmore?* Type their *business name* (or phone number or code) so they get thanked. Or tap Skip.')
       .button('ONB_SKIP', 'Skip');
   }
 
   // ONBOARDING_REFERRAL — the business exists but resolveActor found it only after createBusiness;
   // this path is reached only if the owner row is missing, which createBusiness guarantees it isn't.
-  void button;
   return reply(phone).text('Type your business name to start.');
 }
 
-async function applyReferral(businessId: string, code: string): Promise<boolean> {
-  const referrer = await findBusinessByReferralCode(code);
-  if (!referrer || referrer.id === businessId) return false;
-  await updateBusiness(businessId, { referred_by_business_id: referrer.id });
-  return true;
+/** "Who told you about Unbarmore?" — the owner typed a business name, phone number or code. */
+async function referralAnswer(actor: Actor, text: string): Promise<Reply> {
+  const r = reply(actor.phone);
+  if (/^(skip|no|none|nobody|no one|nil|n\/a|-)$/i.test(text.trim())) {
+    await setSession(actor.phone, 'IDLE', {});
+    return welcomeDone(actor.phone, actor.business.name, null);
+  }
+  const found = await lookupReferrer(text, actor.business.id, actor.phone);
+  if (found.kind === 'found') {
+    const ref = await linkReferrer(actor.business, found.referrer.id);
+    await setSession(actor.phone, 'IDLE', {});
+    return welcomeDone(actor.phone, actor.business.name, ref?.name ?? null);
+  }
+  if (found.kind === 'none') {
+    return r.text(`I couldn't find a business called _${text.slice(0, 40)}_ on Unbarmore. Check the spelling, or type their phone number or code. Or tap Skip.`).button('ONB_SKIP', 'Skip');
+  }
+  if (found.candidates.length === 1) {
+    r.text(`Is it *${found.candidates[0]!.name}*?`).button(`REFY:${found.candidates[0]!.id}`, '✅ Yes, that\'s them').button('ONB_SKIP', 'Skip');
+  } else {
+    r.text('Which one told you about Unbarmore?');
+    for (const c of found.candidates) r.button(`REFY:${c.id}`, c.name.slice(0, 20));
+  }
+  return r;
 }
 
-/** The message that turns a signup into a habit: what to do right now, where the dashboard is, and how to get the evening alert. */
-async function welcomeDone(phone: string, name: string, myCode: string, usedCode: string | null, businessId: string): Promise<Reply> {
-  const link = await createOwnerMagicLink(businessId).catch(() => null); // never let a link problem block a welcome
-  return reply(phone).text(
-    `🎉 You're in, *${name}*! Your ${TRIAL_DAYS}-day free trial has started: ${PLANS.trial.videos_used_this_month} short videos · ${PLANS.trial.tx_logged_this_month} logged messages · ${PLANS.trial.ocr_scans_used_this_month} alert checks.`,
-    usedCode ? `🎁 Referral ${usedCode} applied.` : '',
+const dashLine = (link: string | null) => link ? `📲 *Your dashboard:* ${link}` : '📲 Type *DASHBOARD* any time for your charts.';
+
+/** Last onboarding message: ONE question that decides what we show them first. */
+function welcomeDone(phone: string, name: string, referredBy: string | null): Reply {
+  return reply(phone)
+    .text(
+      `🎉 You're in, *${name}*! ${referredBy ? `*${referredBy}* will be thanked for sending you. ` : ''}Your ${TRIAL_DAYS}-day free trial has started.`,
+      '',
+      '*What hurts most in your business right now?* Pick one and I\'ll start there.',
+    )
+    .button('PAIN_OWE', '💸 Customers owe me')
+    .button('PAIN_PROFIT', '📊 Know my profit')
+    .button('PAIN_START', '🚀 Not sure, start');
+}
+
+/** The 60-second win for each pain. One action, one example they can copy. */
+async function painReply(actor: Actor, kind: 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_START'): Promise<Reply> {
+  const link = await createOwnerMagicLink(actor.business.id).catch(() => null); // never let a link problem block this
+  const body = kind === 'PAIN_OWE'
+    ? [
+        '💸 *Let\'s get your money back.*',
+        'Tell me who owes you. Type or send a voice note:',
+        '_Femi owes me 14k, Kalu 28k, Mama Tunde 9k_',
+        '',
+        'Then say *CHASE*. I write a polite reminder for each person and you send it with one tap. When someone promises a day, say _Femi will pay Friday_ and I\'ll remind you that morning.',
+      ]
+    : kind === 'PAIN_PROFIT'
+    ? [
+        '📊 *Let\'s find what you really make.*',
+        'Send your last sale, the way you\'d tell a friend:',
+        '_sold 2 bags rice 30k cash_',
+        '',
+        'Then tell me what it cost you: _rice costs me 22k_. I\'ll show your real profit after cost, not just money in.',
+      ]
+    : [
+        '🚀 *Easiest start:* tell me your last sale, the way you\'d tell a friend. Type or send a voice note:',
+        '_sold 2 bags rice 30k cash_',
+        '',
+        'Or send 2–3 product photos and I\'ll make a sales video for you.',
+      ];
+  return reply(actor.phone).text(
+    ...body,
     '',
-    '*Start with these 3 steps:*',
-    '1️⃣ *Tell me a sale.* Send a voice note or type: _"Sold 2 lace 50k, transfer 30k, balance 20k Mama Tunde"_',
-    '2️⃣ *Tell me who owes you.* Type: _"Femi owes me 14k, Kalu 28k"_',
-    '3️⃣ *Make a customer receipt* with the 🧾 button after a sale.',
-    '',
-    'Also: 📸 send photos for a sales video · 🧾 send a transfer screenshot and I check if it\'s fake · 💬 ask me anything about your business.',
-    '',
-    link ? `📲 *Your dashboard:* ${link}` : '📲 Type *DASHBOARD* any time for your charts and AI advisor.',
-    link ? '_Open it, add it to your Home Screen, and tap "Turn on my evening alert". Every evening I\'ll show you what you made and who still owes you._' : '',
-    '',
-    '⏰ I\'ll message you at *7 AM* (who to follow up today) and *9 PM* (how your day went). Reply *REMINDERS OFF* to pause.',
-    `Type *START* any time to see your progress. Your referral code: *${myCode}*, share it and you both get ₦1,000.`,
+    dashLine(link),
+    '⏰ Every morning at *7 AM* I\'ll tell you who to chase and who to call back. Reply *REMINDERS OFF* to pause.',
+    'Type *START* to see your progress, or *REFER* to earn cash for every shop you bring.',
   );
 }
 
@@ -293,13 +338,7 @@ const VideoDetailsSchema = z.object({
 async function onState(actor: Actor, text: string, session: Session): Promise<Reply | null> {
   const p = session.pending_payload;
   switch (session.current_state) {
-    case 'ONBOARDING_REFERRAL': {
-      await setSession(actor.phone, 'IDLE', {});
-      const code = text.match(REF_RE)?.[0]?.toUpperCase();
-      const ok = code ? await applyReferral(actor.business.id, code) : false;
-      if (code && !ok) return reply(actor.phone).text(`Hmm, ${code} isn't valid — no wahala, you're set up anyway.`).text('', 'Send a voice note or product photos to start.');
-      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, ok ? code! : null, actor.business.id);
-    }
+    case 'ONBOARDING_REFERRAL': return referralAnswer(actor, text);
     case 'AWAITING_VIDEO_DETAILS': {
       // Deterministic first: "Cord lace, 17,500 for 5 yards, Yoruba" needs no AI guess.
       const quick = parseVideoCaption(text);
@@ -408,25 +447,30 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     await setReminders(b.id, true);
     return reply(actor.phone).text('✅ Back on. You\'ll hear from me at 7 AM (who to follow up) and 9 PM (how your day went).');
   }
-  if (upper === 'CHASE') return chaseDebtsReply(actor);
+  const chase = parseChaseCommand(t);
+  if (chase) return chaseDebtsReply(actor, chase.lang);
+  const promise = parsePromise(t, watDateKey());
+  if (promise) { const rep = await recordPromise(actor, promise.name, promise.date); if (rep) return rep; }
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
   if (['MENU', 'HELP', '?'].includes(upper)) return helpMenu(actor);
   if (upper === 'I HAVE PAID') return reply(actor.phone).text(`Thanks! Your plan: *${b.subscription_tier}*. If you just paid, it updates within a minute.`);
 
   if (['WITHDRAW', 'CASH OUT', 'CASHOUT', 'PAYOUT'].includes(upper)) return withdrawStart(actor);
+  if (['USE CREDIT', 'USE MY CREDIT', 'CREDIT'].includes(upper) && !actor.isStaff) return setRenewalCredit(actor, true);
+  if (['KEEP CASH', 'CASH', 'KEEP MY CASH'].includes(upper) && !actor.isStaff) return setRenewalCredit(actor, false);
   if (['REFER', 'WALLET', 'REFERRAL'].includes(upper)) {
-    const link = `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent(`Hi Unbarmore ${b.referral_code}`)}`;
+    const link = `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent(`Hi Unbarmore, ${b.name} sent me (${b.referral_code})`)}`;
     const wallet = Number(b.referral_wallet_ngn);
     const pend = await pendingPayout(b.id);
     const r = reply(actor.phone).text(
-      `🎁 Wallet: *${ngn(wallet)}*  ·  Your code: *${b.referral_code}*`,
+      `🎁 Wallet: *${ngn(wallet)}*`,
       '',
-      `• Each referral who subscribes = *${ngn(REFERRAL.REWARD_NGN)}* for you AND for them.`,
-      `• Any balance from ${ngn(REFERRAL.DISCOUNT_MIN_NGN)} takes money off your own renewal — automatically.`,
-      `• Cash payout unlocks at *${ngn(REFERRAL.WITHDRAW_MIN_NGN)}* (${WITHDRAW_MIN_REFERRALS} referrals): type *WITHDRAW*.`,
+      `• Every shop you bring that subscribes pays *you* cash: *${ngn(REFERRAL.REWARD_BY_TIER.starter_5k)}* for Starter, *${ngn(REFERRAL.REWARD_BY_TIER.growth_15k)}* for Growth.`,
+      `• They only need to say *${b.name}* sent them when they join (or use your code *${b.referral_code}*).`,
+      `• Cash out from ${ngn(REFERRAL.WITHDRAW_MIN_NGN)}: type *WITHDRAW*. Or send *USE CREDIT* to take it off your own renewal instead.`,
       pend ? `\n⏳ Payout pending: ${ngn(pend.amountNgn)} → ${pend.bankName ?? 'bank'} ${maskAccount(pend.accountNumber)}${pend.ref ? ` (${pend.ref})` : ''}` : '',
-      '', 'Forward this to other sellers 👇', link,
+      '', 'Forward this to other shop owners 👇', link,
     );
     if (wallet >= REFERRAL.WITHDRAW_MIN_NGN && !pend) r.button('WITHDRAW', '💸 Withdraw cash');
     return r;
@@ -574,7 +618,13 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     }
     case 'ONB_SKIP':
       await setSession(actor.phone, 'IDLE', {});
-      return welcomeDone(actor.phone, actor.business.name, actor.business.referral_code, null, actor.business.id);
+      return welcomeDone(actor.phone, actor.business.name, null);
+    case 'REFY': {
+      const ref = a ? await linkReferrer(actor.business, a) : null;
+      await setSession(actor.phone, 'IDLE', {});
+      return welcomeDone(actor.phone, actor.business.name, ref?.name ?? null);
+    }
+    case 'PAIN_OWE': case 'PAIN_PROFIT': case 'PAIN_START': return painReply(actor, kind as 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_START');
     case 'BTN_CHASE_DEBT': return chaseDebtsReply(actor);
     case 'WINBACK': return customerMessagesReply(actor, 'winback');
     case 'DASHLINK': return dashboardReply(actor);
@@ -591,7 +641,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
 
 async function runBrain(
   actor: Actor,
-  input: { text?: string; audio?: { data: Buffer; mimeType: string }; image?: { data: Buffer; mimeType: string; caption?: string } },
+  input: { sentAt?: string | null; text?: string; audio?: { data: Buffer; mimeType: string }; image?: { data: Buffer; mimeType: string; caption?: string } },
   session: Session,
 ): Promise<Reply> {
   // Resolve Smart Order Codes to product names so "sold 2 UNB-7K2" logs against the right product.
@@ -621,6 +671,7 @@ async function runBrain(
         return reply(actor.phone).text(`That's ${brain.transactions.length} items in one message — please send them in batches of ${MAX_LINES_PER_MESSAGE} or fewer so I can check each one.`);
       }
       return proposeBatch(actor, source, linesToDrafts(brain.transactions), {
+        occurredAt: input.sentAt ?? undefined,
         clarification: brain.clarification_needed,
         prefix: brain.transcript ? `🎙️ _"${brain.transcript.slice(0, 200)}"_\n` : undefined,
       });

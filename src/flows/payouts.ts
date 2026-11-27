@@ -1,5 +1,5 @@
 import { env } from '../config/env.js';
-import { REFERRAL, WITHDRAW_MIN_REFERRALS } from '../config/plans.js';
+import { REFERRAL } from '../config/plans.js';
 import { db, setSession, type Actor } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
 import { decidePayout, listPendingPayouts, pendingPayout, PayoutsNotReadyError, requestPayout } from '../services/payouts.js';
@@ -57,11 +57,9 @@ export async function withdrawStart(actor: Actor): Promise<Reply> {
     );
   }
   if (wallet < REFERRAL.WITHDRAW_MIN_NGN) {
-    const more = Math.ceil((REFERRAL.WITHDRAW_MIN_NGN - wallet) / REFERRAL.REWARD_NGN);
     return r.text(
-      `🎁 Your wallet is *${ngn(wallet)}*. Cash payout unlocks at *${ngn(REFERRAL.WITHDRAW_MIN_NGN)}* (${WITHDRAW_MIN_REFERRALS} paid referrals) — ${more} more referral${more === 1 ? '' : 's'} to go.`,
-      wallet >= REFERRAL.DISCOUNT_MIN_NGN ? `Meanwhile, your ${ngn(wallet)} already takes money off your own next renewal — automatically.` : '',
-      'Type *REFER* to share your code.',
+      `🎁 Your wallet is *${ngn(wallet)}*. Cash payout starts at *${ngn(REFERRAL.WITHDRAW_MIN_NGN)}*: that is one shop you bring who subscribes (*${ngn(REFERRAL.REWARD_BY_TIER.starter_5k)}* for Starter, *${ngn(REFERRAL.REWARD_BY_TIER.growth_15k)}* for Growth).`,
+      'Type *REFER* to get your link.',
     );
   }
   await setSession(actor.phone, 'AWAITING_PAYOUT_DETAILS', { at: Date.now() });
@@ -165,4 +163,16 @@ export async function adminPayoutCommand(adminPhone: string, text: string): Prom
         : `Your payout request ${ref} couldn't be completed, so *${ngn(d.amountNgn)} is back in your wallet*. Check the account details and type WITHDRAW to try again${env.SUPPORT_WHATSAPP_URL ? `, or ask us: ${env.SUPPORT_WHATSAPP_URL}` : '.'}`,
     ) } : null,
   };
+}
+
+/** USE CREDIT / KEEP CASH: whether wallet money discounts the owner's own renewal (off by default: cash is the default). */
+export async function setRenewalCredit(actor: Actor, on: boolean): Promise<Reply> {
+  const { error } = await db.from('businesses').update({ referral_apply_to_renewal: on }).eq('id', actor.business.id);
+  if (error) return reply(actor.phone).text('I could not save that choice yet. Please try again in a few minutes.');
+  const wallet = Number(actor.business.referral_wallet_ngn);
+  return reply(actor.phone).text(
+    on ? `✅ Done. Your wallet (${ngn(wallet)} now) will come off your next renewal automatically.`
+       : `✅ Done. Your wallet (${ngn(wallet)} now) stays as cash. Type *WITHDRAW* to cash out.`,
+    on ? 'Changed your mind? Send *KEEP CASH*.' : 'Want it off your renewal instead? Send *USE CREDIT*.',
+  );
 }

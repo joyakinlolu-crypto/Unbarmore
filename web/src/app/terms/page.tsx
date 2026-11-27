@@ -69,9 +69,10 @@ export default function Terms() {
       <section>
         <H n={7}>Referral credits</H>
         <P>
-          If you refer a new business and it makes its first paid subscription, you and the new business may each receive a credit, currently ₦1,000, in a referral wallet. Credits reduce your renewal price, and a cash payout becomes
-          available once the wallet reaches the minimum shown in the app (currently ₦5,000). Credits have no cash value outside this scheme, and cannot be earned by referring yourself or by misleading people. We may withhold
-          or reverse credits earned unfairly and may change or end the scheme.
+          If you refer a new business and it makes its first paid subscription, we credit <b>you</b> (the referrer) a referral reward in your referral wallet: currently ₦1,000 when the new business subscribes to Starter and ₦3,000
+          when it subscribes to Growth. The new business is not paid a reward. You can ask for the wallet balance as a bank payout once it reaches the minimum shown in the app (currently ₦1,000), or choose to use it to reduce your own
+          renewal. Rewards have no cash value outside this scheme, and cannot be earned by referring yourself, by creating fake or duplicate accounts, or by misleading people. We may withhold or reverse rewards earned unfairly
+          and may change or end the scheme.
         </P>
       </section>
 

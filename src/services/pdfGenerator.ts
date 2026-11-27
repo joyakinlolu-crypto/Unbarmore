@@ -61,17 +61,17 @@ function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rc
 }
 
 /** Invitation printed on customer-facing receipts: the owner's customers are the next owners. Omitted on the no-watermark plan. */
-export interface Promo { botNumber: string; referralCode: string }
+export interface Promo { botNumber: string; referralCode: string; businessName?: string }
 
 function footer(doc: PDFKit.PDFDocument, promo?: Promo | null) {
   const w = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const y = doc.page.height - doc.page.margins.bottom - 12;
   if (promo) {
-    const link = `https://wa.me/${promo.botNumber}?text=${encodeURIComponent(`Hi Unbarmore ${promo.referralCode}`)}`;
+    const link = `https://wa.me/${promo.botNumber}?text=${encodeURIComponent(`Hi Unbarmore, ${promo.businessName ?? 'a shop owner'} sent me (${promo.referralCode})`)}`;
     doc.font('bold').fontSize(8).fillColor(BRAND.green)
       .text(`Run your shop on WhatsApp. Try Unbarmore free: wa.me/${promo.botNumber}`, doc.page.margins.left, y - 22, { width: w, align: 'center', lineBreak: false, link, underline: true });
     doc.font('reg').fontSize(7).fillColor(BRAND.muted)
-      .text(`Use code ${promo.referralCode} and you both get ₦1,000`, doc.page.margins.left, y - 11, { width: w, align: 'center', lineBreak: false });
+      .text(promo.businessName ? `Tell them ${promo.businessName} sent you (code ${promo.referralCode})` : `Use code ${promo.referralCode}`, doc.page.margins.left, y - 11, { width: w, align: 'center', lineBreak: false });
   }
   doc.font('reg').fontSize(7).fillColor(BRAND.muted)
     .text('Generated on WhatsApp with Unbarmore · unbarmore.com', doc.page.margins.left, y, { width: w, align: 'center', lineBreak: false });

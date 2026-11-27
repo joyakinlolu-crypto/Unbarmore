@@ -3,12 +3,14 @@ import { ngn, watDateKey } from '../lib/money.js';
 import { profitLabel, profitPhrase, profitView } from '../lib/profit.js';
 import { clientStats, lapsed } from './clients.js';
 import { periodRange } from './insights.js';
+import { firstName, reminderText } from '../lib/debtReminders.js';
+import { waLink } from '../lib/waLink.js';
 
 /**
  * The 7 AM note: who to follow up with TODAY. Built from the owner's own records, so it works for a shop (stock, customers who
  * owe, customers gone quiet) and for a service business (clients who owe, clients to win back) alike.
  */
-export interface DueDebt { name: string; amount: number; /** >0 days overdue, 0 today, <0 due in N days, null = no due date, owed for `age` days */ late: number | null; age: number }
+export interface DueDebt { name: string; phone?: string | null; amount: number; /** >0 days overdue, 0 today, <0 due in N days, null = no due date, owed for `age` days */ late: number | null; age: number }
 export interface MorningFacts {
   businessName: string;
   yesterday: { count: number; line: string } | null;
@@ -85,6 +87,9 @@ export function composeMorning(f: MorningFacts): MorningMessage {
   else if (!f.yesterday || f.yesterday.count === 0) focus = '👉 Send me yesterday\'s sales and expenses in one voice note so your books stay right.';
   else focus = '👉 Have a great day! Send a voice note when the first sale or expense happens.';
   lines.push('', focus);
+  const target = urgent ?? (debts[0] && debts[0].late === null ? debts[0] : undefined);
+  const link = target ? waLink(target.phone, reminderText({ customer: target.name, amountNgn: target.amount, business: f.businessName, days: target.age })) : null;
+  if (target && link) lines.push(`👉 Tap to send ${firstName(target.name)}'s reminder: ${link}`);
   if (f.appNudge) lines.push('', appNudgeText(f.appNudge));
   if (f.isMonday) lines.push('', '_Reply REMINDERS OFF to pause these morning and evening notes._');
 
@@ -102,10 +107,10 @@ const dayNum = (ymd: string) => Math.floor(Date.parse(`${ymd}T00:00:00Z`) / DAY)
 
 /** Debts that need attention: overdue, due today, or due within `horizonDays`; plus the oldest undated debt if nothing else. Most urgent first. */
 export async function dueDebts(businessId: string, horizonDays = 2, today = watDateKey()): Promise<DueDebt[]> {
-  const { data } = await db.from('customers').select('name, outstanding_debt_ngn, debt_due_date, debt_since').eq('business_id', businessId).gt('outstanding_debt_ngn', 0).limit(500);
+  const { data } = await db.from('customers').select('name, phone_number, outstanding_debt_ngn, debt_due_date, debt_since').eq('business_id', businessId).gt('outstanding_debt_ngn', 0).limit(500);
   const t = dayNum(today);
   const rows = (data ?? []).map((c) => ({
-    name: c.name as string, amount: Number(c.outstanding_debt_ngn),
+    name: c.name as string, phone: (c.phone_number as string | null) ?? null, amount: Number(c.outstanding_debt_ngn),
     late: c.debt_due_date ? t - dayNum(String(c.debt_due_date).slice(0, 10)) : null,
     age: c.debt_since ? Math.max(0, Math.floor((Date.now() - new Date(c.debt_since as string).getTime()) / DAY)) : 0,
   }));

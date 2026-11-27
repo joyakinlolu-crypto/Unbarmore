@@ -41,6 +41,8 @@ export interface Business {
   referred_by_business_id: string | null;
   referral_reward_paid: boolean;
   referral_wallet_ngn: number;
+  /** The owner chose to use wallet money on their own renewal instead of cash. Needs migration 009. */
+  referral_apply_to_renewal?: boolean;
   total_value_recovered_ngn: number;
   google_sheet_id: string | null;
   created_at: string;
@@ -283,7 +285,7 @@ export async function upsertCustomer(businessId: string, name: string, attempt =
 // ───────────── Ledger ─────────────
 
 export async function createPendingBatch(
-  actor: Actor, source: SourceChannel, drafts: TxnDraft[],
+  actor: Actor, source: SourceChannel, drafts: TxnDraft[], occurredAt?: string,
 ): Promise<{ batchId: string; rows: TxnRow[] }> {
   const batchId = crypto.randomUUID();
   const rows = [];
@@ -310,6 +312,7 @@ export async function createPendingBatch(
       ocr_fraud_flag: d.ocr_fraud_flag ?? false,
       ocr_fraud_reason: d.ocr_fraud_reason ?? null,
       status: 'pending_confirm',
+      ...(occurredAt ? { transaction_date: occurredAt } : {}),
     });
   }
   const inserted = must<TxnRow[]>(await db.from('transactions').insert(rows).select('*'), 'insertTxns');
@@ -387,10 +390,10 @@ export async function topProducts(businessId: string, from: Date, to: Date, limi
   return ((data ?? []) as { name: string; qty: string; revenue_ngn: string }[]).map((r) => ({ name: r.name, qty: Number(r.qty), revenue: Number(r.revenue_ngn) }));
 }
 
-export interface Debtor { id: string; name: string; phone_number: string | null; outstanding_debt_ngn: number; debt_since: string | null }
+export interface Debtor { id: string; name: string; phone_number: string | null; outstanding_debt_ngn: number; debt_since: string | null; debt_due_date: string | null; last_reminder_sent_at: string | null }
 
 export async function debtors(businessId: string, limit = 20): Promise<Debtor[]> {
-  const { data } = await db.from('customers').select('id, name, phone_number, outstanding_debt_ngn, debt_since')
+  const { data } = await db.from('customers').select('id, name, phone_number, outstanding_debt_ngn, debt_since, debt_due_date, last_reminder_sent_at')
     .eq('business_id', businessId).gt('outstanding_debt_ngn', 0)
     .order('outstanding_debt_ngn', { ascending: false }).limit(limit);
   return ((data ?? []) as Debtor[]).map((d) => ({ ...d, outstanding_debt_ngn: Number(d.outstanding_debt_ngn) }));

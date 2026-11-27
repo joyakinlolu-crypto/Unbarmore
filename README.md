@@ -99,9 +99,11 @@ set -a; . web/.env.local; set +a; npx tsx scripts/live-web-e2e.mts
 Gotchas learned: don't export the bot's `NODE_ENV=development` into the web build (Next prerender crash); kill stale `next-server` processes (port 3333).
 Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cloud account needed.
 
-## Referral wallet & cash payouts (migration `003_referral_payouts.sql`)
-- Every paid referral credits **₦1,000 to both sides**. **Any balance from ₦1,000** automatically discounts the owner's own renewal.
-- **Cash payout unlocks at ₦5,000** (5 referrals): `WITHDRAW` in WhatsApp, or **Request Cash Payout** in the web app's Settings. The whole wallet is paid out.
+## Referral wallet & cash payouts (migrations `003_referral_payouts.sql` + `009_referral_v2.sql`)
+- **Only the referrer is paid**, when the referred shop makes its first paid subscription: **₦1,000 for Starter, ₦3,000 for Growth**. The new shop gets its free trial and nothing else.
+- A new owner is asked *"Who told you about Unbarmore?"* and can answer with the referrer's **business name**, phone number or code. Names are matched, then confirmed ("Is it *Joy's Fabrics*?") before anything is linked. Self-referral is refused.
+- Wallet money is **cash by default**. `USE CREDIT` makes it come off the owner's own renewal instead; `KEEP CASH` switches back.
+- **Cash payout unlocks at ₦1,000** (one Starter referral): `WITHDRAW` in WhatsApp, or **Request Cash Payout** in the web app's Settings. The whole wallet is paid out.
 - The bot asks for **Bank Name + 10-digit NUBAN**, validates them strictly, marks the request **pending** in `referral_ledger`, zeroes the wallet and messages `ADMIN_PHONE`.
 - Double withdrawal is blocked by the database (locked wallet row + a unique "one pending payout per business" index + a 10-digit CHECK).
 - Admin (from `ADMIN_PHONE`): `PAYOUTS` lists pending · `PAID WD-XXXXXX` after paying · `REJECT WD-XXXXXX` returns the money to the wallet. The business is told either way.

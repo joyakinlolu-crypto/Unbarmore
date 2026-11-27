@@ -3,7 +3,8 @@ import {
   type Actor, type Business,
 } from '../db/supabase.js';
 import { ngn, ngnShort, watWeekKey } from '../lib/money.js';
-import { writeDebtReminders } from '../services/geminiBrain.js';
+import { promiseLabel, reminderText, type ReminderLang } from '../lib/debtReminders.js';
+import { waLink } from '../lib/waLink.js';
 import { weeklyStatementPdf } from '../services/pdfGenerator.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { loadLogo } from './branding.js';
@@ -92,14 +93,39 @@ export function reportTemplateParams(b: Business, r: WeeklyReport): string[] {
 
 // ───────────── 1-tap action buttons ─────────────
 
-export async function chaseDebtsReply(actor: Actor): Promise<Reply> {
-  const list = (await debtors(actor.business.id, 8)).filter((d) => d.outstanding_debt_ngn > 0);
+/**
+ * One-tap debt reminders. No AI call: fixed templates that get firmer as the debt ages (see lib/debtReminders.ts).
+ * Each customer with a saved number gets a wa.me link that opens THEIR chat with the message already typed;
+ * the owner just presses send. Everything fits in ONE WhatsApp message.
+ */
+const CHASE_BUDGET = 3300; // characters; WhatsApp's text limit is 4096
+export async function chaseDebtsReply(actor: Actor, lang: ReminderLang = 'english'): Promise<Reply> {
+  const list = (await debtors(actor.business.id, 12)).filter((d) => d.outstanding_debt_ngn > 0);
   if (!list.length) return reply(actor.phone).text('🎉 Nobody owes you money right now.');
-  const msgs = await writeDebtReminders(actor.business.name, list.map((d) => ({ name: d.name, amount: ngn(d.outstanding_debt_ngn), days: daysSince(d.debt_since) })));
-  await db.from('customers').update({ last_reminder_sent_at: new Date().toISOString() }).in('id', list.map((d) => d.id));
+  const lines: string[] = [];
+  const sent: string[] = [];
+  let used = 0, noNumber = 0;
+  for (const d of list) {
+    const days = d.debt_since ? daysSince(d.debt_since) : 0;
+    const msg = reminderText({ customer: d.name, amountNgn: d.outstanding_debt_ngn, business: actor.business.name, days, lang });
+    const link = waLink(d.phone_number, msg);
+    const when = d.debt_due_date ? ` · promised ${promiseLabel(String(d.debt_due_date).slice(0, 10))}` : '';
+    const asked = d.last_reminder_sent_at ? ` · reminded ${daysSince(d.last_reminder_sent_at) === 0 ? 'today' : `${daysSince(d.last_reminder_sent_at)}d ago`}` : '';
+    const block = ['', `*${d.name}* · ${ngn(d.outstanding_debt_ngn)}${days >= 1 ? ` · ${days}d` : ''}${when}${asked}`, link ? `👉 ${link}` : `${msg}\n_(no number saved: copy this)_`].join('\n');
+    if (used + block.length > CHASE_BUDGET && lines.length) break;
+    lines.push(block); used += block.length; sent.push(d.id);
+    if (!link) noNumber += 1;
+  }
+  await db.from('customers').update({ last_reminder_sent_at: new Date().toISOString() }).in('id', sent);
+  const total = list.reduce((a, d) => a + d.outstanding_debt_ngn, 0);
+  const more = list.length - sent.length;
   return reply(actor.phone).text(
-    '💬 *Copy & forward these:*',
-    ...msgs.flatMap((m) => ['', `*→ ${m.customer}*`, m.message]),
+    `💬 *${ngn(total)} is waiting for you.* Tap a name's link, WhatsApp opens with the message ready, then press send:`,
+    ...lines,
+    '',
+    more > 0 ? `…and ${more} more. Send these first, then say *CHASE* again.` : '',
+    noNumber > 0 ? `Tip: save their numbers (_Femi's number is 0803…_) and the link opens straight to their chat.` : '',
+    `When someone gives a date, tell me: _Femi will pay Friday_ and I'll remind you that morning. Pidgin: *CHASE PIDGIN* · Yoruba: *CHASE YORUBA*`,
   );
 }
 

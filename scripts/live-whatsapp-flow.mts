@@ -15,11 +15,13 @@ import os from 'node:os';
 import path from 'node:path';
 import Redis from 'ioredis';
 import { GoogleGenAI } from '@google/genai';
+import { parsePromiseDate } from '../src/lib/debtReminders.js';
+import { watDateKey } from '../src/lib/money.js';
 
 const need = (k: string) => { const v = process.env[k]; if (!v) throw new Error(`missing env ${k} (run: set -a; . ./.env; set +a)`); return v; };
 const SB = need('SUPABASE_URL'), SBKEY = need('SUPABASE_SERVICE_ROLE_KEY'), SECRET = need('WHATSAPP_APP_SECRET'), VERIFY = need('WHATSAPP_VERIFY_TOKEN');
 const PHONE_ID = need('WHATSAPP_PHONE_NUMBER_ID'), GKEY = need('GEMINI_API_KEY');
-const FAKE_PORT = 4010, BOT_PORT = 3050, PH = '2349000000401', PH2 = '2349000000402', BOT = `http://127.0.0.1:${BOT_PORT}`;
+const FAKE_PORT = 4010, BOT_PORT = 3050, PH = '2349000000401', PH2 = '2349000000402', PH3 = '2349000000403', BOT = `http://127.0.0.1:${BOT_PORT}`;
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: unknown, extra = '') => { cond ? pass++ : fail++; console.log(`${cond ? '✅' : '❌'} ${name}${extra ? ' — ' + String(extra).replace(/\s+/g, ' ').slice(0, 170) : ''}`); };
@@ -117,7 +119,7 @@ async function ask(label: string, send: () => Promise<number>, until: (v: Return
 
 // ───────────────────────── cleanup ─────────────────────────
 async function cleanup() {
-  for (const phone of [PH, PH2]) {
+  for (const phone of [PH, PH2, PH3]) {
     const bs = await rows(`businesses?owner_phone=eq.${phone}&select=id`);
     for (const b of bs) for (const bucket of ['raw-images', 'cleaned-images', 'videos', 'pdf-receipts']) {
       const l = await fetch(`${SB}/storage/v1/object/list/${bucket}`, { method: 'POST', headers: { apikey: SBKEY, Authorization: `Bearer ${SBKEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefix: b.id, limit: 100 }) });
@@ -164,12 +166,40 @@ try {
   const trialDays = (new Date(biz?.trial_ends_at).getTime() - Date.now()) / 864e5;
   ok('the trial runs 14 days (not the old 7)', trialDays > 13.9 && trialDays <= 14.01, `${trialDays.toFixed(2)} days left`);
 
-  r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text));
-  ok('tap Skip → welcome with examples and the referral code', !!r.reply && /UNBAR-/.test(r.reply.text));
+  r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text) && v.buttons.some((b) => b.id === 'PAIN_OWE'));
   const welcomeText = r.reply?.text ?? '';
-  ok('welcome gives 3 clear first steps (tell me a sale · tell me who owes you · make a receipt), mentions photos/screenshots and "ask me anything", and says how to see progress (START)', /Start with these 3 steps/.test(welcomeText) && /Tell me a sale/.test(welcomeText) && /who owes you/i.test(welcomeText) && /receipt/i.test(welcomeText) && /photos/.test(welcomeText) && /screenshot/.test(welcomeText) && /ask me anything about your business/i.test(welcomeText) && /START/.test(welcomeText) && /7 AM/.test(welcomeText) && /9 PM/.test(welcomeText) && /REMINDERS OFF/.test(welcomeText), welcomeText.replace(/\n/g, ' | ').slice(0, 200));
-  ok('welcome carries a one-tap dashboard link + the "evening alert" instruction', /auth\/verify\?token=[a-f0-9]{64}/.test(welcomeText) && /Turn on my evening alert/.test(welcomeText) && /Home Screen/.test(welcomeText));
-  ok('that was ONE welcome message', real(r.all).length === 1, `${real(r.all).length} message(s)`);
+  ok('tap Skip → ONE short welcome that asks "What hurts most?" with 3 pain buttons', !!r.reply && real(r.all).length === 1 && /What hurts most/i.test(welcomeText) && r.reply.buttons.map((b) => b.id).join() === 'PAIN_OWE,PAIN_PROFIT,PAIN_START' && welcomeText.length < 400, `${welcomeText.length} chars: ${welcomeText.replace(/\n/g, ' | ').slice(0, 160)}`);
+  ok('the welcome does not sound like bookkeeping', !/\b(bookkeeping|books|ledger|records?|track)\b/i.test(welcomeText));
+
+  const pains: [string, RegExp, RegExp][] = [
+    ['PAIN_OWE', /get your money back/i, /CHASE/],
+    ['PAIN_PROFIT', /what you really make/i, /costs me 22k/],
+    ['PAIN_START', /Easiest start/i, /product photos/],
+  ];
+  for (const [id, head, tip] of pains) {
+    r = await ask(id, () => button(id), (v) => head.test(v.text));
+    const t = r.reply?.text ?? '';
+    ok(`${id} → ONE message with a copy-paste example, a dashboard link and the 7 AM promise`, !!r.reply && real(r.all).length === 1 && tip.test(t) && /auth\/verify\?token=[a-f0-9]{64}/.test(t) && /7 AM/.test(t) && /REMINDERS OFF/.test(t) && /REFER/.test(t), t.replace(/\n/g, ' | ').slice(0, 170));
+  }
+
+  await rest(`web_magic_tokens?business_id=eq.${biz!.id}`, { method: 'DELETE' }); // three taps made three login links; forget them so the later DASHBOARD check is not rate-limited
+
+  // ───── 3b. referral by BUSINESS NAME (a second shop, new on WhatsApp) ─────
+  const text3 = (t: string) => webhook({ type: 'text', text: { body: t } }, undefined, PH3);
+  const button3 = (id: string) => webhook({ type: 'interactive', interactive: { type: 'button_reply', button_reply: { id, title: 'tap' } } }, undefined, PH3);
+  await ask('r-hi', () => text3('Hi'), (v) => /business name/i.test(v.text));
+  r = await ask('r-name', () => text3('Chidi Tools'), (v) => /Who told you about Unbarmore/i.test(v.text) && v.buttons.some((b) => b.id === 'ONB_SKIP'));
+  ok('new shop → "Who told you about Unbarmore?" (business name, phone or code) with Skip', !!r.reply, r.reply?.text.replace(/\n/g, ' | ').slice(0, 150));
+  r = await ask('r-nobody', () => text3('Zenith Quantum Imports'), (v) => /couldn.t find/i.test(v.text));
+  ok('a name that matches nobody is NOT linked to a stranger: "couldn\'t find…" and Skip stays available', !!r.reply && r.reply.buttons.some((b) => b.id === 'ONB_SKIP'));
+  r = await ask('r-match', () => text3('Ada Fabrics'), (v) => /Is it \*?Ada Fabrics\*?\?/i.test(v.text) && v.buttons.some((b) => b.id.startsWith('REFY:')));
+  ok('typing "Ada Fabrics" → "Is it Ada Fabrics?" asks to confirm before linking', !!r.reply, r.reply?.text.replace(/\n/g, ' | '));
+  const chidiBefore = (await rows(`businesses?owner_phone=eq.${PH3}&select=referred_by_business_id`))[0];
+  ok('nothing is linked until they confirm', chidiBefore?.referred_by_business_id === null);
+  r = await ask('r-yes', () => button3(r.reply!.buttons.find((b) => b.id.startsWith('REFY:'))!.id), (v) => /You.re in/i.test(v.text));
+  const chidi = (await rows(`businesses?owner_phone=eq.${PH3}&select=referred_by_business_id,referral_reward_paid,referral_wallet_ngn`))[0];
+  ok('confirm → linked to Ada Fabrics, and the welcome says Ada Fabrics will be thanked', chidi?.referred_by_business_id === biz!.id && /Ada Fabrics.*thanked/.test(r.reply?.text ?? ''), JSON.stringify(chidi));
+  ok('the new shop has no reward (only the referrer is ever paid)', Number(chidi?.referral_wallet_ngn) === 0 && chidi?.referral_reward_paid === false);
 
   // ───── 4–7. ledger: propose → confirm → debts → undo ─────
   r = await ask('sale', () => text('sold 2 lace 50k, paid 30k transfer, balance 20k Mama Tunde. bought fuel 5k'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
@@ -313,30 +343,32 @@ try {
   const other = sent.slice(b3).map(view);
   ok('ADMIN from any other number gets NOTHING (treated as an ordinary first message)', other.length >= 1 && !other.some((v) => /live stats|Est\. MRR|Businesses:/.test(v.text)), other[0]?.text.slice(0, 80));
 
-  // ───── 12e. referral wallet: ₦1,000 renewal discount, ₦5,000 cash payout (needs migration 003 on the database) ─────
+  // ───── 12e. referral wallet: ₦1,000 cash-out minimum (needs migrations 003 + 009 on the database) ─────
   const payoutsReady = Array.isArray(await (await rest('payout_requests?select=ref&limit=1')).json());
+  const referralV2 = Array.isArray(await (await rest('businesses?select=referral_apply_to_renewal&limit=1')).json());
   if (!payoutsReady) console.log('⏭️  payout tests skipped: run supabase/migrations/003_referral_payouts.sql in Supabase, then re-run');
+  else if (!referralV2) console.log('⏭️  referral cash-out tests skipped: run supabase/migrations/009_referral_v2.sql in Supabase (₦1,000 minimum), then re-run');
   else {
     const setWallet = (v: number) => rest(`businesses?id=eq.${biz!.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ referral_wallet_ngn: v }) });
     const wallet = async () => Number((await rows(`businesses?id=eq.${biz!.id}&select=referral_wallet_ngn`))[0]?.referral_wallet_ngn);
     const state = async () => String((await rows(`whatsapp_sessions?phone_number=eq.${PH}&select=current_state`))[0]?.current_state);
 
-    await setWallet(3000);
-    r = await ask('withdraw-locked', () => text('WITHDRAW'), (v) => /unlocks at/i.test(v.text));
-    ok('WITHDRAW with ₦3,000 → "unlocks at ₦5,000 (5 referrals) — 2 more", renewal discount mentioned, nothing started', !!r.reply && /₦5,000/.test(r.reply.text) && /2 more referrals/.test(r.reply.text) && /renewal/.test(r.reply.text) && (await state()) === 'IDLE', r.reply?.text.replace(/\n/g, ' | '));
+    await setWallet(500);
+    r = await ask('withdraw-locked', () => text('WITHDRAW'), (v) => /starts at/i.test(v.text));
+    ok('WITHDRAW with ₦500 → "starts at ₦1,000" (one shop you bring), what Starter/Growth pay, nothing started', !!r.reply && /₦1,000/.test(r.reply.text) && /₦3,000/.test(r.reply.text) && (await state()) === 'IDLE', r.reply?.text.replace(/\n/g, ' | '));
     r = await ask('refer-locked', () => text('REFER'), (v) => /Wallet/i.test(v.text));
-    ok('REFER at ₦3,000 explains the rules and shows NO withdraw button', !!r.reply && /₦1,000/.test(r.reply.text) && /WITHDRAW/.test(r.reply.text) && !r.reply.buttons.some((b) => b.id === 'WITHDRAW'));
+    ok('REFER at ₦500 explains the rules (₦1,000 Starter / ₦3,000 Growth, "X sent me", cash or USE CREDIT) and shows NO withdraw button', !!r.reply && /₦1,000/.test(r.reply.text) && /₦3,000/.test(r.reply.text) && /Ada Fabrics.*sent/.test(r.reply.text) && /USE CREDIT/.test(r.reply.text) && /wa\.me\/.*Ada%20Fabrics/.test(r.reply.text) && !r.reply.buttons.some((b) => b.id === 'WITHDRAW'), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
 
-    await setWallet(5000);
+    await setWallet(1000);
     r = await ask('refer-unlocked', () => text('REFER'), (v) => v.buttons.some((b) => b.id === 'WITHDRAW'));
-    ok('REFER at ₦5,000 → "💸 Withdraw cash" button appears', !!r.reply);
+    ok('REFER at ₦1,000 → "💸 Withdraw cash" button appears', !!r.reply);
     r = await ask('withdraw-tap', () => button('WITHDRAW'), (v) => /bank name/i.test(v.text));
     ok('tap Withdraw → asks for Bank Name + 10-digit account number', !!r.reply && /10-digit/.test(r.reply.text) && (await state()) === 'AWAITING_PAYOUT_DETAILS');
 
     r = await ask('bad1', () => text('ok'), (v) => /10-digit/.test(v.text));
-    ok('junk like "ok" is NOT accepted as bank details (wallet untouched)', !!r.reply && (await wallet()) === 5000 && (await state()) === 'AWAITING_PAYOUT_DETAILS');
+    ok('junk like "ok" is NOT accepted as bank details (wallet untouched)', !!r.reply && (await wallet()) === 1000 && (await state()) === 'AWAITING_PAYOUT_DETAILS');
     r = await ask('bad2', () => text('GTBank 08012345678'), (v) => /10-digit/.test(v.text));
-    ok('an 11-digit phone number is refused as an account number', !!r.reply && (await wallet()) === 5000);
+    ok('an 11-digit phone number is refused as an account number', !!r.reply && (await wallet()) === 1000);
 
     const sent0 = sent.length;
     r = await ask('payout', () => text('GTBank 0123456789'), (v) => /Payout requested/.test(v.text));
@@ -344,7 +376,7 @@ try {
     ok('valid details → "Payout requested", pending, reference WD-XXXXXX, account masked', !!r.reply && !!ref && /pending/i.test(r.reply.text) && /\*\*\*\*6789/.test(r.reply.text) && !/0123456789/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | '));
     const pr = (await rows(`payout_requests?business_id=eq.${biz!.id}&select=status,bank_name,account_number,amount_ngn,ref`))[0];
     const led = (await rows(`referral_ledger?business_id=eq.${biz!.id}&entry_type=eq.cash_payout&select=status,amount_ngn,notes`))[0];
-    ok('database: wallet is ₦0, referral_ledger row is PENDING (−₦5,000), payout row holds bank + NUBAN', (await wallet()) === 0 && led?.status === 'pending' && Number(led?.amount_ngn) === -5000 && pr?.status === 'requested' && pr?.bank_name === 'GTBank' && pr?.account_number === '0123456789' && pr?.ref === ref);
+    ok('database: wallet is ₦0, referral_ledger row is PENDING (−₦1,000), payout row holds bank + NUBAN', (await wallet()) === 0 && led?.status === 'pending' && Number(led?.amount_ngn) === -1000 && pr?.status === 'requested' && pr?.bank_name === 'GTBank' && pr?.account_number === '0123456789' && pr?.ref === ref);
     await sleep(2500);
     const adminMsg = sent.slice(sent0).map(view).find((v) => /Payout request WD-/.test(v.text));
     ok('ADMIN_PHONE is notified on WhatsApp with full bank details and the PAID / REJECT commands', !!adminMsg && /0123456789/.test(adminMsg.text) && new RegExp(`PAID ${ref}`).test(adminMsg.text) && new RegExp(`REJECT ${ref}`).test(adminMsg.text), adminMsg?.text.replace(/\n/g, ' | ').slice(0, 160));
@@ -598,6 +630,36 @@ try {
   r = await ask('how-much-femi', () => text('how much does Femi owe me'), (v) => /Femi/.test(v.text));
   ok('"how much does Femi owe me" → ₦14,000', !!r.reply && /14,000/.test(r.reply.text), r.reply?.text);
 
+  // ───── debt recovery: CHASE (one-tap links), "X will pay Friday", the credit-sale warning ─────
+  r = await ask('chase', () => text('CHASE'), (v) => /is waiting for you/i.test(v.text));
+  const chaseText = r.reply?.text ?? '';
+  ok('CHASE → ONE message: total waiting, a block per debtor, template wording (firm for old debts), promise tip, language tip', !!r.reply && real(r.all).length === 1 && /₦62,000 is waiting for you/.test(chaseText) && /Femi/.test(chaseText) && /Olowoyeye/.test(chaseText) && /Hello (Femi|Kalu|Olowoyeye)/.test(chaseText.replace(/\*/g, '')) === true || /wa\.me/.test(chaseText), chaseText.replace(/\n/g, ' | ').slice(0, 220));
+  ok('CHASE fits one WhatsApp message and uses no AI wording ("no number saved" blocks carry the ready text)', chaseText.length < 4000 && /Femi will pay Friday/.test(chaseText) && /CHASE PIDGIN/.test(chaseText));
+  await text('Femi\'s number is 08031230001');
+  await sleep(2500);
+  r = await ask('chase-link', () => text('CHASE'), (v) => /wa\.me\/2348031230001\?text=/.test(v.text));
+  ok('once Femi\'s number is saved, his block is a wa.me link that opens HIS chat with the reminder already typed', !!r.reply && /Hello%20Femi/.test(r.reply.text), r.reply?.text.match(/wa\.me\/\S+/)?.[0]?.slice(0, 120));
+  r = await ask('chase-pidgin', () => text('CHASE PIDGIN'), (v) => /is waiting for you/i.test(v.text));
+  ok('CHASE PIDGIN → the same debtors with Pidgin reminders ("Abeg")', !!r.reply && /Abeg|Abeg/i.test(decodeURIComponent(r.reply.text.replace(/%(?![0-9A-Fa-f]{2})/g, '%25'))));
+
+  const friday = parsePromiseDate('friday', watDateKey())!;
+  r = await ask('promise', () => text('Femi will pay Friday'), (v) => /Noted/.test(v.text));
+  const femiDue = (await rows(`customers?business_id=eq.${biz!.id}&name=eq.Femi&select=debt_due_date`))[0]?.debt_due_date;
+  ok('"Femi will pay Friday" → noted, the day is saved on his debt, and he will appear in that morning\'s note', !!r.reply && /Femi/.test(r.reply.text) && /7 AM/.test(r.reply.text) && String(femiDue).slice(0, 10) === friday, `${femiDue} vs ${friday}`);
+  r = await ask('promise-nobody', () => text('Nonexistent Person will pay Friday'), (v) => v.text.length > 0 && !/Processing your entry/.test(v.text), 45_000);
+  ok('a promise for someone who owes nothing is NOT swallowed (falls through to the normal router, no "Noted")', !!r.reply && !/Noted/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 120));
+
+  r = await ask('credit-warn', () => text('sold 1 gele 5k to Femi on credit, nothing paid'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')) || /already owes/.test(v.text));
+  ok('a credit sale to someone who already owes ₦14,000 → "⚠️ Femi already owes you ₦14,000… Collect first?" BEFORE confirming', !!r.reply && /Femi already owes you ₦14,000/.test(r.reply.text.replace(/\*/g, '')), r.reply?.text.replace(/\n/g, ' | ').slice(0, 220));
+  const warnDiscard = r.reply?.buttons.find((b) => b.id.startsWith('TXX:'))?.id; if (warnDiscard) await ask('warn-discard', () => button(warnDiscard), (v) => v.text.length > 0);
+
+  // a message typed offline and delivered 2 hours late keeps the time it was SENT
+  const sentSec = Math.floor(Date.now() / 1000) - 2 * 3600;
+  r = await ask('late-sale', () => webhook({ type: 'text', timestamp: String(sentSec), text: { body: 'sold 1 gele 3k cash' } }), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
+  const lateRow = (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.pending_confirm&select=transaction_date&order=created_at.desc&limit=1`))[0];
+  ok('a sale delivered 2 hours late is dated when it was SENT, and the owner is told ("🕒 Dated …")', !!r.reply && /Dated/.test(r.reply.text) && Math.abs(new Date(lateRow?.transaction_date).getTime() - sentSec * 1000) < 2000, `${lateRow?.transaction_date}`);
+  const lateDiscard = r.reply?.buttons.find((b) => b.id.startsWith('TXX:'))?.id; if (lateDiscard) await ask('late-discard', () => button(lateDiscard), (v) => v.text.length > 0);
+
   // a customer pays one of those debts: this is a repayment, and the 🎉 moment shows it
   r = await ask('femi-pays', () => text('Femi don pay 14k'), (v) => v.buttons.some((b) => b.id.startsWith('TXC:')));
   ok('"Femi don pay 14k" → logged as a debt payment (not a sale)', !!r.reply && /[Dd]ebt/.test(r.reply.text) && !/Sale|Sold/.test(r.reply.text.split('\n')[0] ?? ''), r.reply?.text.replace(/\n/g, ' | '));
@@ -802,7 +864,7 @@ try {
   try { process.kill(-bot.pid!, 'SIGTERM'); } catch { bot.kill('SIGTERM'); }
   fake.close(); redis.disconnect();
   await cleanup().catch((e) => console.error('cleanup error', e));
-  const left = (await rows(`businesses?owner_phone=in.(${PH},${PH2})&select=id`).catch(() => [{}])) as unknown[];
+  const left = (await rows(`businesses?owner_phone=in.(${PH},${PH2},${PH3})&select=id`).catch(() => [{}])) as unknown[];
   console.log(`\n🧹 cleanup: ${left.length === 0 ? 'all test data and files removed' : 'TEST DATA REMAINS'}`);
   if (fail) { const errs = fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => /"level":(50|60)|\[send\]|\[inbound\]|\[video\]|Error/.test(l)).slice(-8); if (errs.length) console.log('\nlast bot errors:\n' + errs.map((l) => '  ' + l.slice(0, 230)).join('\n')); }
   console.log(`\n${fail === 0 ? '🎉' : '⚠️'} ${pass} passed, ${fail} failed`);

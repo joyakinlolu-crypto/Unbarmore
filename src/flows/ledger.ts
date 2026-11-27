@@ -10,6 +10,8 @@ import { reply, type Reply } from '../services/whatsapp.js';
 import { ngn, ngnShort } from '../lib/money.js';
 import { todayLine } from './insights.js';
 import { moneyBack, moneyBackLine } from './moneyBack.js';
+import { creditWarning } from './creditWarning.js';
+import { watDayLabel } from '../lib/money.js';
 
 export const BTN = {
   confirm: (batch: string) => `TXC:${batch}`,
@@ -71,7 +73,7 @@ export const MAX_LINES_PER_MESSAGE = 25;
 
 /** Step 1 of HITL: parse → pending batch → one reply with summary + [Confirm] [Edit]. */
 export async function proposeBatch(
-  actor: Actor, source: SourceChannel, drafts: TxnDraft[], opts: { clarification?: string; prefix?: string } = {},
+  actor: Actor, source: SourceChannel, drafts: TxnDraft[], opts: { clarification?: string; prefix?: string; occurredAt?: string } = {},
 ): Promise<Reply> {
   const r = reply(actor.phone);
   // Pre-check only (no charge yet): don't walk a user through Confirm just to block them at the end.
@@ -79,8 +81,11 @@ export async function proposeBatch(
   const cap = PLANS[actor.business.subscription_tier].tx_logged_this_month;
   if (countsTowardTxQuota(source) && cap >= 0 && actor.business.tx_logged_this_month >= cap) return quotaReply(actor, 'tx_logged_this_month');
 
-  const { batchId } = await createPendingBatch(actor, source, drafts);
+  const { batchId } = await createPendingBatch(actor, source, drafts, opts.occurredAt);
   r.text(opts.prefix, drafts.length > 1 ? `I got ${drafts.length} entries:` : 'I got:', ...drafts.map(draftLine));
+  if (opts.occurredAt) r.text(`🕒 Dated *${watDayLabel(opts.occurredAt)}*, when you sent it.`);
+  const credit = await creditWarning(actor.business.id, drafts).catch(() => null);
+  if (credit) r.text('', credit);
   if (opts.clarification) r.text('', `⚠️ ${opts.clarification} Tap Edit to fix.`);
   r.text('', '_Reply UNDO within 5 min to reverse._')
     .button(BTN.confirm(batchId), '✅ Confirm')

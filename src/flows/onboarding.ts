@@ -33,7 +33,7 @@ export function checklistText(steps: Step[]): string {
   const done = steps.filter((s) => s.done).length;
   const next = nextStep(steps);
   return [
-    '*How Unbarmore works:* you talk or send a voice note, I keep your books, and you always know your money, who owes you, and what to do next.',
+    '*How Unbarmore works:* you talk or send a voice note, and I help you get paid, see what you really make, and know who to call today.',
     '',
     `📋 *Getting started: ${done} of ${steps.length} done*`,
     ...steps.map((s) => `${s.done ? '✅' : '⬜'} ${s.title}`),

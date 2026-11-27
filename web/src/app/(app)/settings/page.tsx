@@ -4,7 +4,7 @@ import PushPrompt from '@/components/PushPrompt';
 import { requireSession } from '@/lib/auth';
 import { ngn, waLink } from '@/lib/format';
 import { db } from '@/lib/supabase';
-import { REFERRAL, walletState, WITHDRAW_MIN_REFERRALS } from '@/lib/referral';
+import { REFERRAL, walletState } from '@/lib/referral';
 import { botNumber } from '@/lib/whatsapp';
 import ProfileForm from './ProfileForm';
 
@@ -22,7 +22,7 @@ export default async function Settings() {
   const ws = walletState(wallet, !!pend);
   const paid = b.subscription_tier === 'starter_5k' || b.subscription_tier === 'growth_15k';
   const share = waLink(bot, `Hi Unbarmore ${b.referral_code}`);
-  const shareMsg = `I use Unbarmore to make sales videos, track my profit and catch fake transfer alerts — all on WhatsApp. Use my code ${b.referral_code} and we both get ₦1,000 when you subscribe: ${share}`;
+  const shareMsg = `I use Unbarmore to make sales videos, track my profit and catch fake transfer alerts — all on WhatsApp. When you join, say ${b.name} sent you (or use my code ${b.referral_code}): ${share}`;
   const expires = new Date(paid ? b.subscription_expires_at : b.trial_ends_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
   const upgrade = (t: string) => waLink(bot, t);
   const card = 'rounded-3xl border border-slate-100 p-5 shadow-sm';
@@ -37,8 +37,8 @@ export default async function Settings() {
       <section className={card}><h2 className="mb-2 font-semibold">Evening money alert</h2><PushPrompt compact /></section>
 
       <section className="rounded-3xl bg-gradient-to-br from-royal to-accent p-5 text-white">
-        <h2 className="flex items-center gap-2 font-semibold"><Gift size={18} /> Give ₦1,000, get ₦1,000</h2>
-        <p className="mt-1 text-sm text-blue-100">When someone you refer subscribes, you both get ₦1,000 credit.</p>
+        <h2 className="flex items-center gap-2 font-semibold"><Gift size={18} /> Get paid for every shop you bring</h2>
+        <p className="mt-1 text-sm text-blue-100">When a shop you bring subscribes, you get {ngn(REFERRAL.REWARD_BY_TIER.starter_5k)} cash for Starter or {ngn(REFERRAL.REWARD_BY_TIER.growth_15k)} for Growth. They just say {b.name} sent them.</p>
         <div className="mt-3 flex items-end justify-between">
           <div><p className="text-xs text-blue-200">Your code</p><p className="text-2xl font-extrabold tracking-wider">{b.referral_code}</p></div>
           <div className="text-right"><p className="text-xs text-blue-200">Wallet</p><p className="text-2xl font-extrabold">{ngn(b.referral_wallet_ngn)}</p></div>
@@ -53,8 +53,7 @@ export default async function Settings() {
         {ws.kind === 'locked' && (
           <div className="mt-3">
             <div className="h-2 overflow-hidden rounded-full bg-white/20" role="progressbar" aria-valuenow={ws.progressPct} aria-valuemin={0} aria-valuemax={100}><div className="h-2 rounded-full bg-emerald-300" style={{ width: `${Math.max(4, ws.progressPct)}%` }} /></div>
-            <p className="mt-1.5 text-xs text-blue-100">Cash payout unlocks at {ngn(REFERRAL.WITHDRAW_MIN_NGN)} ({WITHDRAW_MIN_REFERRALS} referrals) — {ws.referralsToGo} more to go.</p>
-            {ws.canDiscount && <p className="mt-1 text-xs text-blue-100">Meanwhile your {ngn(wallet)} already takes money off your next renewal.</p>}
+            <p className="mt-1.5 text-xs text-blue-100">Cash payout starts at {ngn(REFERRAL.WITHDRAW_MIN_NGN)}: that is one shop you bring who subscribes.</p>
           </div>
         )}
       </section>

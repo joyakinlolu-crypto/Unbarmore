@@ -216,17 +216,12 @@ describe('message 3 of 3: open with the biggest exact ₦ leak', () => {
   });
 });
 
-describe('referral wallet card (₦5,000 payout threshold, ₦1,000 renewal discount)', () => {
-  it('under ₦5,000: locked, with the number of referrals still needed', () => {
-    expect(walletState(0, false)).toEqual({ kind: 'locked', referralsToGo: 5, progressPct: 0, canDiscount: false });
-    expect(walletState(3000, false)).toEqual({ kind: 'locked', referralsToGo: 2, progressPct: 60, canDiscount: true });
-    expect(walletState(4000, false)).toMatchObject({ kind: 'locked', referralsToGo: 1 });
+describe('referral wallet card (₦1,000 payout threshold: one shop you bring is enough)', () => {
+  it('under ₦1,000: locked, one referral away', () => {
+    expect(walletState(0, false)).toEqual({ kind: 'locked', referralsToGo: 1, progressPct: 0, canDiscount: false });
+    expect(walletState(500, false)).toMatchObject({ kind: 'locked', referralsToGo: 1, progressPct: 50 });
   });
-  it('a wallet under ₦1,000 cannot discount a renewal; ₦1,000 can', () => {
-    expect(walletState(500, false)).toMatchObject({ canDiscount: false });
-    expect(walletState(1000, false)).toMatchObject({ canDiscount: true });
-  });
-  it('₦5,000 or more unlocks the cash payout button', () => { expect(walletState(5000, false)).toEqual({ kind: 'unlocked' }); expect(walletState(12000, false)).toEqual({ kind: 'unlocked' }); });
+  it('₦1,000 or more unlocks the cash payout button', () => { expect(walletState(1000, false)).toEqual({ kind: 'unlocked' }); expect(walletState(12000, false)).toEqual({ kind: 'unlocked' }); });
   it('a pending payout wins over everything (no second button)', () => { expect(walletState(9000, true)).toEqual({ kind: 'pending' }); expect(walletState(0, true)).toEqual({ kind: 'pending' }); });
 });
 

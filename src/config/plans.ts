@@ -80,15 +80,21 @@ export const METRIC_LABEL: Record<Metric, string> = {
 };
 
 /**
- * Referral wallet rules — single source for the bot (the web app mirrors these in web/src/lib/referral.ts; a test keeps all three in sync,
- * including the 5000 hard-coded in supabase/migrations/003_referral_payouts.sql).
+ * Referral wallet rules — single source for the bot (the web app mirrors these in web/src/lib/referral.ts; a test keeps all
+ * copies in sync, including the numbers hard-coded in supabase/migrations/009_referral_v2.sql).
+ *
+ * v2: ONLY the referrer is paid (the new shop gets its free trial; paying both sides doubled the cost and invited fake accounts),
+ * the reward scales with the plan the referred shop buys, and one referral is enough to cash out.
  */
 export const REFERRAL = {
-  /** Credited to BOTH sides when a referred business makes its first paid subscription. */
+  /** Paid to the REFERRER when the referred business makes its first paid subscription, by the plan it bought. */
+  REWARD_BY_TIER: { starter_5k: 1000, growth_15k: 3000 },
+  /** The Starter amount: the headline number we quote ("get ₦1,000 for every shop you bring"). */
   REWARD_NGN: 1000,
-  /** Any wallet balance from here up automatically discounts the owner's own renewal. */
+  /** Wallet money can discount the owner's own renewal, but only if they choose that (USE CREDIT). Cash is the default. */
   DISCOUNT_MIN_NGN: 1000,
-  /** Cash payout unlocks here: 5 paid referrals × ₦1,000. */
-  WITHDRAW_MIN_NGN: 5000,
+  /** Cash payout unlocks here: one Starter referral. */
+  WITHDRAW_MIN_NGN: 1000,
 } as const;
+export const rewardForTier = (tier: string): number => (REFERRAL.REWARD_BY_TIER as Record<string, number>)[tier] ?? 0;
 export const WITHDRAW_MIN_REFERRALS = REFERRAL.WITHDRAW_MIN_NGN / REFERRAL.REWARD_NGN;

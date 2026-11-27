@@ -3,7 +3,7 @@ import { ngn } from '../lib/money.js';
 import { writeCustomerMessages } from '../services/geminiBrain.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { daysSince } from './insights.js';
-import { normalisePhone } from './records.js';
+import { waLink } from '../lib/waLink.js';
 
 /** A customer as the owner sees them: what they've spent, when they last bought, what they owe. */
 export interface ClientStat { id: string; name: string; phone: string | null; spent: number; owes: number; lastBuy: string | null; createdAt: string }
@@ -57,7 +57,6 @@ export function lapsedText(stats: ClientStat[]): string {
 }
 
 const firstName = (n: string) => n.trim().split(/\s+/)[0]!;
-const waLink = (phone: string | null, msg: string) => { const p = phone ? normalisePhone(phone) : null; return p ? `https://wa.me/${p}?text=${encodeURIComponent(msg)}` : null; };
 
 /**
  * Ready-to-send messages for customers who went quiet ('winback') or best customers ('thank_top'). The owner sends them

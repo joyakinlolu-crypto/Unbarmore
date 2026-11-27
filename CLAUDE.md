@@ -34,14 +34,10 @@ You are building the production backend for **Unbarmore** (`unbarmore.com`), an 
 4. **`growth_15k` (₦15,000/month OR ₦150,000/year — Multi-Staff Tier):**
    - Monthly Caps: `50` HD videos/mo (**no watermark**), unlimited transactions, `500` OCR scans/mo, up to `10` authorized staff WhatsApp numbers (every staff sale sends a silent audit alert to `owner_phone`), Daily EOD owner audit, and Live Google Sheets Sync.
 
-### B. ₦1,000 "Give-to-Get" Viral Referral System
-- Every new business receives a unique `referral_code` (`UNBAR-XXXX`) at onboarding.
-- If a new user enters a valid `referral_code` during onboarding, set `referred_by_business_id`.
-- **Trigger on First Paid Conversion (`charge.success` webhook):** When a referred user makes their first paid subscription payment (`>= ₦5,000`) and `referral_reward_paid == FALSE`:
-  1. Credit **`₦1,000.00`** to the referrer's `referral_wallet_ngn` AND **`₦1,000.00`** to the new subscriber's `referral_wallet_ngn`.
-  2. Log both entries in `referral_ledger` and set `referral_reward_paid = TRUE`.
-  3. Notify the referrer via WhatsApp if within their 24-hour free window (or attach to their next summary).
-- Users can apply `referral_wallet_ngn` toward their next Paystack renewal or request a bank transfer payout once `referral_wallet_ngn >= ₦5,000`.
+### B. Referral System (v2: pay the referrer cash, by plan)
+- Every new business receives a unique `referral_code` (`UNBAR-XXXX`) at onboarding. The new owner is asked "Who told you about Unbarmore?" and may answer with the referrer's **business name**, phone number or code; a name is matched and confirmed before `referred_by_business_id` is set.
+- **Trigger on First Paid Conversion (`charge.success` webhook):** when a referred business makes its first paid subscription (`>= ₦5,000`) and `referral_reward_paid == FALSE`, credit **only the referrer's** `referral_wallet_ngn`: **₦1,000 for Starter, ₦3,000 for Growth** (`REFERRAL.REWARD_BY_TIER`). The new subscriber gets no wallet credit. Log one `referrer_bonus` row in `referral_ledger`, set `referral_reward_paid = TRUE`.
+- Wallet is **cash by default**: bank payout once `referral_wallet_ngn >= ₦1,000`. The owner may opt in (`USE CREDIT`) to apply it to their own renewal instead.
 
 ---
 

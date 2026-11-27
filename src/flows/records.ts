@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { normalisePhone } from '../lib/waLink.js';
 import { db, upsertCustomer, upsertProduct, type Actor } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
 import { reply, type Reply } from '../services/whatsapp.js';
@@ -267,13 +268,7 @@ export async function undoAction(actor: Actor, kv: KV, tk: string): Promise<Repl
 // ═════════════════════════ CUSTOMER PHONE ═════════════════════════
 
 /** 0803… / 803… / +234 803… → 234803…; anything else → null. */
-export function normalisePhone(raw: string): string | null {
-  const d = raw.replace(/\D/g, '');
-  if (/^234\d{10}$/.test(d)) return d;
-  if (/^0\d{10}$/.test(d)) return '234' + d.slice(1);
-  if (/^\d{10}$/.test(d)) return '234' + d;
-  return null;
-}
+export { normalisePhone };
 
 export async function saveCustomerPhone(actor: Actor, nameRaw: string, phoneRaw: string): Promise<Reply> {
   const name = normName(nameRaw).slice(0, 60);

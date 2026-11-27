@@ -113,7 +113,7 @@ export async function customerReceiptReply(actor: Actor, batchId: string | null,
     businessName: actor.business.name, rcNumber: actor.business.rc_number, receiptNumber, dateWat: date, customerName: customer,
     lines, amountPaid, paymentMethod: method || '—', remainingBalance: remaining, balanceAsAt: fmtDate(new Date().toISOString()),
     logo: await loadLogo(actor.business),
-    promo: PLANS[actor.business.subscription_tier].watermark === 'none' ? null : { botNumber: env.WHATSAPP_DISPLAY_NUMBER, referralCode: actor.business.referral_code },
+    promo: PLANS[actor.business.subscription_tier].watermark === 'none' ? null : { botNumber: env.WHATSAPP_DISPLAY_NUMBER, referralCode: actor.business.referral_code, businessName: actor.business.name },
   });
   const path = await uploadFile('pdf-receipts', `${actor.business.id}/${receiptNumber}.pdf`, pdf, 'application/pdf');
   await setReceiptUrl(batchId, path);

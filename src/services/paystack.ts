@@ -62,9 +62,9 @@ const syntheticEmail = (b: Business) => `${b.owner_phone}@wa.unbarmore.com`;
 export async function createCheckoutLink(b: Business, tier: PaidTier, interval: Interval): Promise<{ url: string; amountNgn: number; walletApplied: number }> {
   if (!paymentsLive() || !isReal(PLAN_CODES[tier][interval])) throw new PaymentsNotLiveError();
   const price = PRICES_NGN[tier][interval];
-  // Any balance from ₦1,000 discounts the owner's own renewal (never below Paystack's ₦100 minimum charge).
+  // Wallet money discounts the owner's own renewal ONLY if they chose it (USE CREDIT); cash is the default. Never below Paystack's ₦100 minimum charge.
   const wallet = Number(b.referral_wallet_ngn);
-  const walletApplied = wallet >= REFERRAL.DISCOUNT_MIN_NGN ? Math.min(wallet, price - 100) : 0;
+  const walletApplied = b.referral_apply_to_renewal && wallet >= REFERRAL.DISCOUNT_MIN_NGN ? Math.min(wallet, price - 100) : 0;
   const amountNgn = price - Math.max(0, walletApplied);
   const metadata = { business_id: b.id, tier, interval, wallet_applied: Math.max(0, walletApplied) };
 
@@ -119,6 +119,7 @@ export interface PaymentOutcome {
   amountNgn: number;
   referrerId: string | null;
   referralCredited: boolean;
+  referralRewardNgn: number;
 }
 
 async function resolveBusinessId(e: PaystackEvent): Promise<string | null> {
@@ -200,7 +201,7 @@ export async function handlePaystackEvent(e: PaystackEvent): Promise<PaymentOutc
     p_wallet_applied: Number(meta.wallet_applied ?? 0),
   });
   if (error) throw new Error(`apply_subscription_payment: ${error.message}`);
-  const row = (data as { processed: boolean; referrer_id: string | null; referral_credited: boolean }[])[0];
+  const row = (data as { processed: boolean; referrer_id: string | null; referral_credited: boolean; reward_ngn: string | number | null }[])[0];
   if (!row?.processed) return null;
 
   return {
@@ -210,5 +211,6 @@ export async function handlePaystackEvent(e: PaystackEvent): Promise<PaymentOutc
     amountNgn,
     referrerId: row.referrer_id,
     referralCredited: row.referral_credited,
+    referralRewardNgn: Number(row.reward_ngn ?? 0),
   };
 }

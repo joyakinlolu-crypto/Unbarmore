@@ -39,3 +39,11 @@ export function randomCode(len: number, alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ2345
   for (let i = 0; i < len; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
   return s;
 }
+
+/** "Monday 5 Dec, 9:40 PM": when something happened, in Lagos time. */
+export function watDayLabel(iso: string): string {
+  const d = new Date(new Date(iso).getTime() + WAT_OFFSET_MS);
+  const day = d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const h = d.getUTCHours(), m = d.getUTCMinutes();
+  return `${day}, ${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}

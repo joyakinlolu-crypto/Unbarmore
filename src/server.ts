@@ -121,13 +121,12 @@ app.post('/webhooks/paystack', async (req, res) => {
       return;
     }
 
-    const { business: b, tier, interval, referrerId, referralCredited } = outcome as PaymentOutcome;
+    const { business: b, tier, interval, referrerId, referralCredited, referralRewardNgn } = outcome as PaymentOutcome;
     const label = tier === 'growth_15k' ? 'Growth' : 'Starter';
     // Payer just interacted (they were on the checkout link) — but the window may be stale; failure is non-fatal.
     await reply(b.owner_phone).text(
       `🎉 *Payment received — you're on ${label}${interval === 'annual' ? ' (yearly)' : ''}!*`,
       tier === 'growth_15k' ? '50 videos · unlimited logging · 10 staff numbers · Google Sheets sync' : `${PLANS.starter_5k.videos_used_this_month} videos · 250 logged messages · 150 alert checks · voice notes · Sunday CEO report`,
-      referralCredited ? `🎁 ₦1,000 referral reward added to your wallet (${ngn(b.referral_wallet_ngn)}).` : '',
       '', 'Send a voice note or photos to get going.',
     ).send().catch(() => undefined);
 
@@ -136,7 +135,7 @@ app.post('/webhooks/paystack', async (req, res) => {
       // Free only inside their 24h window; otherwise they see the balance via REFER / next summary.
       if (ref && (await isInServiceWindow(ref.owner_phone as string))) {
         await reply(ref.owner_phone as string)
-          .text(`🎁 *${b.name}* subscribed with your code — ₦1,000 added to your wallet! Balance: ${ngn(Number(ref.referral_wallet_ngn))}`)
+          .text(`🎁 *${b.name}* just subscribed because of you. *${ngn(referralRewardNgn)}* added to your wallet! Balance: ${ngn(Number(ref.referral_wallet_ngn))}. Type *WITHDRAW* to cash out.`)
           .send().catch(() => undefined);
       }
     }

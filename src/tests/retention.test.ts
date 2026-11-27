@@ -141,16 +141,16 @@ describe('money back', () => {
 const hasPdftotext = (() => { try { execFileSync('pdftotext', ['-v'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 describe.skipIf(!hasPdftotext)('"Powered by Unbarmore" on customer receipts', () => {
   const base = { businessName: 'AsoEwa Fabrics', rcNumber: null, receiptNumber: 'R1', dateWat: '24 Nov 2026', customerName: 'Mama Tunde', lines: [{ description: 'Lace', quantity: 1, unitPrice: 50_000, amount: 50_000 }], amountPaid: 50_000, paymentMethod: 'cash' };
-  const text = async (promo: { botNumber: string; referralCode: string } | null) => {
+  const text = async (promo: { botNumber: string; referralCode: string; businessName?: string } | null) => {
     const file = join(mkdtempSync(join(tmpdir(), 'rcpt-')), 'r.pdf');
     writeFileSync(file, await receiptPdf({ ...base, promo }));
     return execFileSync('pdftotext', [file, '-'], { encoding: 'utf8' });
   };
   it('carries the invite, the bot number and the owner\'s referral code', async () => {
-    const t = await text({ botNumber: '15551658238', referralCode: 'UNBAR-X87X' });
+    const t = await text({ botNumber: '15551658238', referralCode: 'UNBAR-X87X', businessName: 'AsoEwa Fabrics' });
     expect(t).toContain('wa.me/15551658238');
     expect(t).toContain('UNBAR-X87X');
-    expect(t).toContain('both get ₦1,000');
+    expect(t).toContain('AsoEwa Fabrics sent you');
   });
   it('is absent when promo is off (no-watermark plan) but the receipt itself is intact', async () => {
     const t = await text(null);

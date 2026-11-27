@@ -24,7 +24,7 @@ vi.mock('../services/payouts.js', async () => {
   return { ...real, pendingPayout: m.pendingPayout, requestPayout: m.requestPayout, decidePayout: m.decidePayout, listPendingPayouts: m.listPendingPayouts };
 });
 
-import { REFERRAL, WITHDRAW_MIN_REFERRALS } from '../config/plans.js';
+import { REFERRAL, rewardForTier } from '../config/plans.js';
 import { adminPayoutCommand, maskAccount, parseBankDetails, submitPayout, withdrawStart } from '../flows/payouts.js';
 import { PayoutsNotReadyError } from '../services/payouts.js';
 
@@ -36,16 +36,22 @@ const actor = (wallet: number, extra: Record<string, unknown> = {}, isStaff = fa
 
 beforeEach(() => { Object.values(m).forEach((f) => typeof f === 'function' && (f as ReturnType<typeof vi.fn>).mockReset()); m.pendingPayout.mockResolvedValue(null); m.bizRow.current = { name: 'Ada Fabrics', owner_phone: '2348000000001' }; });
 
-describe('the ₦5,000 rule is one number everywhere', () => {
-  it('bot constant, SQL function and web copy all say 5,000 / 1,000 (5 referrals)', () => {
-    expect(REFERRAL.WITHDRAW_MIN_NGN).toBe(5000);
+describe('the referral numbers are the same everywhere (bot, SQL, web)', () => {
+  it('₦1,000 cash-out minimum; Starter ₦1,000, Growth ₦3,000; only the referrer is paid', () => {
+    expect(REFERRAL.WITHDRAW_MIN_NGN).toBe(1000);
     expect(REFERRAL.DISCOUNT_MIN_NGN).toBe(1000);
-    expect(WITHDRAW_MIN_REFERRALS).toBe(5);
-    const sql = fs.readFileSync('supabase/migrations/003_referral_payouts.sql', 'utf8');
-    expect(sql).toMatch(/min_payout CONSTANT NUMERIC := 5000;/);
+    expect(rewardForTier('starter_5k')).toBe(1000);
+    expect(rewardForTier('growth_15k')).toBe(3000);
+    expect(rewardForTier('free_limited')).toBe(0);
+    const sql = fs.readFileSync('supabase/migrations/009_referral_v2.sql', 'utf8');
+    expect(sql).toMatch(/min_payout CONSTANT NUMERIC := 1000;/);
+    expect(sql).toMatch(/WHEN 'growth_15k' THEN 3000 WHEN 'starter_5k' THEN 1000/);
+    expect(sql).toMatch(/CHECK \(amount_ngn >= 1000\)/); // payout_requests had its own hidden ₦5,000 floor
+    expect(sql).not.toMatch(/signup_bonus/);   // the new shop is NOT paid
     const web = fs.readFileSync('web/src/lib/referral.ts', 'utf8');
-    expect(web).toContain('WITHDRAW_MIN_NGN: 5000');
+    expect(web).toContain('WITHDRAW_MIN_NGN: 1000');
     expect(web).toContain('DISCOUNT_MIN_NGN: 1000');
+    expect(web).toContain('growth_15k: 3000');
   });
 });
 
@@ -71,19 +77,14 @@ describe('parseBankDetails — decides where real money goes, so it is strict', 
 });
 
 describe('WITHDRAW (owner)', () => {
-  it('below ₦5,000: explains what is missing, mentions the renewal discount, and does NOT start a payout', async () => {
-    const t = text(await withdrawStart(actor(3000)));
-    expect(t).toContain('₦3,000'); expect(t).toContain('2 more referrals'); expect(t).toContain('takes money off your own next renewal');
+  it('below ₦1,000: says what one referral pays, does NOT start a payout', async () => {
+    const t = text(await withdrawStart(actor(0)));
+    expect(t).toContain('₦0'); expect(t.replace(/\*/g, '')).toContain('starts at ₦1,000'); expect(t).toContain('₦3,000');
     expect(m.setSession).not.toHaveBeenCalled();
   });
-  it('a wallet under ₦1,000 gets no discount promise; 0 wallet needs all 5 referrals', async () => {
-    const t = text(await withdrawStart(actor(0)));
-    expect(t).toContain('5 more referrals'); expect(t).not.toContain('renewal');
-    expect(text(await withdrawStart(actor(4000)))).toContain('1 more referral to go');
-  });
-  it('exactly ₦5,000 unlocks: asks for bank name + 10-digit account and waits', async () => {
-    const t = text(await withdrawStart(actor(5000)));
-    expect(t).toContain('₦5,000'); expect(t).toContain('bank name'); expect(t).toContain('10-digit account number'); expect(t).toContain('CANCEL');
+  it('exactly ₦1,000 unlocks: asks for bank name + 10-digit account and waits', async () => {
+    const t = text(await withdrawStart(actor(1000)));
+    expect(t).toContain('₦1,000'); expect(t).toContain('bank name'); expect(t).toContain('10-digit account number'); expect(t).toContain('CANCEL');
     expect(m.setSession).toHaveBeenCalledWith('2348000000001', 'AWAITING_PAYOUT_DETAILS', expect.objectContaining({ at: expect.any(Number) }));
   });
   it('a pending payout blocks a second request, even with a full wallet', async () => {
@@ -115,7 +116,7 @@ describe('submitting bank details', () => {
   });
   it.each([
     ['already_pending', 'already have a payout waiting'],
-    ['below_minimum', 'starts at ₦5,000'],
+    ['below_minimum', 'starts at ₦1,000'],
     ['no_business', "couldn't find your account"],
   ])('database says %s → clear message, no admin ping, nothing double-charged', async (reason, needle) => {
     m.requestPayout.mockResolvedValue({ ok: false, reason, ref: null, amountNgn: 3000 });
@@ -162,13 +163,13 @@ describe('ADMIN: PAYOUTS / PAID / REJECT', () => {
   });
 });
 
-describe('own renewal: any wallet balance from ₦1,000 discounts it', () => {
-  const run = async (wallet: number) => {
+describe('own renewal: wallet money only discounts it when the owner chose USE CREDIT', () => {
+  const run = async (wallet: number, useCredit = true) => {
     const calls: { amount: number }[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_u: string, init: { body: string }) => { calls.push(JSON.parse(init.body)); return new Response(JSON.stringify({ status: true, message: 'ok', data: { authorization_url: 'https://pay.test/x' } }), { status: 200 }); }));
     vi.resetModules();
     const { createCheckoutLink } = await import('../services/paystack.js');
-    const r = await createCheckoutLink({ id: 'b1', owner_phone: '2348000000001', name: 'Ada', referral_wallet_ngn: wallet } as never, 'starter_5k', 'monthly');
+    const r = await createCheckoutLink({ id: 'b1', owner_phone: '2348000000001', name: 'Ada', referral_wallet_ngn: wallet, referral_apply_to_renewal: useCredit } as never, 'starter_5k', 'monthly');
     vi.unstubAllGlobals();
     return { ...r, sentKobo: calls[0]!.amount };
   };
@@ -176,4 +177,7 @@ describe('own renewal: any wallet balance from ₦1,000 discounts it', () => {
   it('₦1,000 (the minimum) is applied', async () => { expect((await run(1000)).amountNgn).toBe(4000); });
   it('under ₦1,000 is not applied', async () => { const r = await run(500); expect([r.walletApplied, r.amountNgn]).toEqual([0, 5000]); });
   it('a wallet bigger than the plan never takes the charge below Paystack\'s ₦100 minimum', async () => { const r = await run(9000); expect([r.walletApplied, r.amountNgn]).toEqual([4900, 100]); });
+  it('cash is the default: a wallet is NOT spent on renewal unless the owner chose it', async () => {
+    const r = await run(3000, false); expect([r.walletApplied, r.amountNgn]).toEqual([0, 5000]);
+  });
 });

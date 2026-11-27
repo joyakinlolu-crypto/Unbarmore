@@ -1,6 +1,6 @@
-// Mirrors the bot's REFERRAL constants (src/config/plans.ts) and the SQL minimum in migration 003.
+// Mirrors the bot's REFERRAL constants (src/config/plans.ts) and the SQL minimum in migration 009.
 // A test in the bot's test-suite fails if any of the three copies drift apart.
-export const REFERRAL = { REWARD_NGN: 1000, DISCOUNT_MIN_NGN: 1000, WITHDRAW_MIN_NGN: 5000 } as const;
+export const REFERRAL = { REWARD_NGN: 1000, REWARD_BY_TIER: { starter_5k: 1000, growth_15k: 3000 }, DISCOUNT_MIN_NGN: 1000, WITHDRAW_MIN_NGN: 1000 } as const;
 export const WITHDRAW_MIN_REFERRALS = REFERRAL.WITHDRAW_MIN_NGN / REFERRAL.REWARD_NGN;
 
 export type WalletState =
