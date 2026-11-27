@@ -9,6 +9,7 @@ import { db, downloadFile, getBusiness, getProduct, refundQuota, signedUrl, uplo
 import { QUEUE, redisConnection, type VideoJob } from '../lib/queues.js';
 import { ngn } from '../lib/money.js';
 import { displayPhone } from '../lib/phone.js';
+import { photosForVideo } from '../lib/videoPhotos.js';
 import { writeVideoScript, type VideoScript } from '../services/geminiBrain.js';
 import { enhanceProductPhoto, type StudioTheme } from '../services/imageStudio.js';
 import { synthesizeVoiceover } from '../services/ttsService.js';
@@ -227,7 +228,7 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
   try {
     // Step 1 — studio enhancement (parallel, keep originals on failure)
     const mini = plan.videoLength === 'mini';
-    const raw = (row.raw_image_urls as string[]).slice(0, mini ? MINI_VIDEO.maxPhotos : 5); // fewer photos = fewer image-model calls = cheaper
+    const raw = photosForVideo(row.raw_image_urls as string[], mini, { full: env.VIDEO_MAX_PHOTOS_FULL, mini: env.VIDEO_MAX_PHOTOS_MINI }); // fewer photos = fewer image-model calls = cheaper
     const cleanedPaths: string[] = [];
     const localImages = await Promise.all(raw.map(async (p, i) => {
       const data = await downloadFile('raw-images', p);

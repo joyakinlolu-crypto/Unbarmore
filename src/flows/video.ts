@@ -5,6 +5,7 @@ import { ngn } from '../lib/money.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { quotaReply } from './ledger.js';
 import type { Voice } from '../lib/videoCaption.js';
+import { env } from '../config/env.js';
 
 /** Creates the product lazily, records the job, enqueues the render. Returns the single acknowledgement reply. */
 export async function startVideo(
@@ -18,6 +19,7 @@ export async function startVideo(
     await db.from('products').update({ selling_price_ngn: p.priceNgn, updated_at: new Date().toISOString() }).eq('id', product.id);
   }
   const plan = PLANS[actor.business.subscription_tier];
+  const isMiniPlan = plan.videoLength === 'mini';
   const wanted = p.voice ?? (p.pidgin ? 'pidgin' : 'english');
   const insertJob = (voiceLanguage: string) => db.from('video_jobs').insert({
     business_id: actor.business.id,
@@ -46,6 +48,7 @@ export async function startVideo(
     'Customers will see your WhatsApp number on it so they can order.',
     ...(wanted === 'yoruba' && !note ? ['🗣️ Voice: Yoruba'] : []),
     ...(note ? [note] : []),
+    ...(p.rawPaths.length > (isMiniPlan ? env.VIDEO_MAX_PHOTOS_MINI : env.VIDEO_MAX_PHOTOS_FULL) ? [`📸 I'll use your best ${isMiniPlan ? env.VIDEO_MAX_PHOTOS_MINI : env.VIDEO_MAX_PHOTOS_FULL} photos (the first ones you sent).`] : []),
     'It arrives here in about 2 minutes. Keep selling! 💪',
   );
 }

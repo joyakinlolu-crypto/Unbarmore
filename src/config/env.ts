@@ -37,6 +37,9 @@ const schema = z.object({
   GEMINI_TEXT_FALLBACK_MODEL: z.string().default('gemini-3.5-flash-lite'),
   /** "true" = skip the paid photo-cleanup model (originals are used). For automated tests, so repeated runs don't burn real money. */
   DISABLE_PHOTO_CLEANUP: z.string().optional(),
+  /** Photos used (and cleaned by the paid image model, ~₦60 each) per video. Photo cleanup is ~90% of the AI bill, so these are the cost dials. */
+  VIDEO_MAX_PHOTOS_FULL: z.coerce.number().int().min(1).max(5).default(3),
+  VIDEO_MAX_PHOTOS_MINI: z.coerce.number().int().min(1).max(3).default(2),
   GEMINI_IMAGE_MODEL: z.string().default('gemini-2.5-flash-image'),
 
   TTS_PROVIDER: z.enum(['gemini', 'google', 'azure']).default('gemini'),
