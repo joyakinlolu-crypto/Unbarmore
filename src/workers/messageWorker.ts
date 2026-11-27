@@ -579,7 +579,7 @@ function plansMenu(actor: Actor): Reply {
       `${PLANS.starter_5k.videos_used_this_month} HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor`,
       '',
       `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
-      '50 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
+      '30 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
       Number(b.referral_wallet_ngn) > 0 ? `\n🎁 Your ${ngn(b.referral_wallet_ngn)} wallet is applied automatically.` : '',
       !paymentsLive() ? '\n_Online payment opens very soon — pick a plan and we\'ll sort it with you._' : '',
     )

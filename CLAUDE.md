@@ -32,7 +32,7 @@ You are building the production backend for **Unbarmore** (`unbarmore.com`), an 
 3. **`starter_5k` (₦5,000/month OR ₦50,000/year — 2 Months Free):**
    - Monthly Caps: `15` HD videos/mo (choice of 3 studio themes, subtle watermark), `250` voice/text/SMS logs/mo, `150` OCR scans/mo, unlimited PDF receipts, daily 9 PM check-in, Real-Time Inflation Shield, and full Sunday CEO Report with 1-tap action buttons.
 4. **`growth_15k` (₦15,000/month OR ₦150,000/year — Multi-Staff Tier):**
-   - Monthly Caps: `50` HD videos/mo (**no watermark**), unlimited transactions, `500` OCR scans/mo, up to `10` authorized staff WhatsApp numbers (every staff sale sends a silent audit alert to `owner_phone`), Daily EOD owner audit, and Live Google Sheets Sync.
+   - Monthly Caps: `30` HD videos/mo (**no watermark**), unlimited transactions, `500` OCR scans/mo, up to `10` authorized staff WhatsApp numbers (every staff sale sends a silent audit alert to `owner_phone`), Daily EOD owner audit, and Live Google Sheets Sync.
 
 ### B. Referral System (v2: pay the referrer cash, by plan)
 - Every new business receives a unique `referral_code` (`UNBAR-XXXX`) at onboarding. The new owner is asked "Who told you about Unbarmore?" and may answer with the referrer's **business name**, phone number or code; a name is matched and confirmed before `referred_by_business_id` is set.

@@ -39,7 +39,7 @@ export const PLANS: Record<Tier, PlanCaps> = {
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
   growth_15k: {
-    videos_used_this_month: 50, tx_logged_this_month: -1, ocr_scans_used_this_month: 500, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
+    videos_used_this_month: 30, tx_logged_this_month: -1, ocr_scans_used_this_month: 500, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
     voiceNotes: true, watermark: 'none', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true,
     outboundCeoTemplate: true, maxStaff: 10, sheetsSync: true,
   },

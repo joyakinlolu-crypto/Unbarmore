@@ -56,7 +56,7 @@ describe('plan caps match the spec', () => {
   });
   it('starter and growth', () => {
     expect([PLANS.starter_5k.videos_used_this_month, PLANS.starter_5k.tx_logged_this_month, PLANS.starter_5k.ocr_scans_used_this_month]).toEqual([8, 250, 150]);
-    expect([PLANS.growth_15k.videos_used_this_month, PLANS.growth_15k.tx_logged_this_month, PLANS.growth_15k.ocr_scans_used_this_month, PLANS.growth_15k.maxStaff]).toEqual([50, -1, 500, 10]);
+    expect([PLANS.growth_15k.videos_used_this_month, PLANS.growth_15k.tx_logged_this_month, PLANS.growth_15k.ocr_scans_used_this_month, PLANS.growth_15k.maxStaff]).toEqual([30, -1, 500, 10]);
     expect(PLANS.growth_15k.watermark).toBe('none');
   });
 });

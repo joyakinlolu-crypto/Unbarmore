@@ -158,7 +158,7 @@ Voiceover now defaults to Gemini speech (`TTS_PROVIDER=gemini`) — no Google Cl
 
 
 ## Pricing protection (videos)
-- **Included videos:** trial 3 (previews, 2 photos), Starter 8 (3 photos), Growth 50. At most **2 included videos per shop per day** (`VIDEOS_PER_DAY`).
+- **Included videos:** trial 3 (previews, 2 photos), Starter 8 (3 photos), Growth 30. At most **2 included videos per shop per day** (`VIDEOS_PER_DAY`).
 - **Pay-as-you-go video credits** (any plan, trial too): ₦500 for 1, ₦1,200 for 3. A credit makes a full 15–18 s video (3 photos) with the small watermark and is **never** blocked by the daily limit. Owner commands: `BUY VIDEOS`. Until Paystack is live the request alerts the admin, who collects a transfer and sends `GRANT VIDEOS 08012345678 3`.
 - **Per-shop AI cost log** (migration 008): admin command `COSTS` = estimated naira per shop and per kind, last 7 days (estimates: compare with Google AI Studio → Spend). Prices live in `src/lib/aiCost.ts`.
 - **Cleaned photos are reused** when a video is remade from exactly the same uploaded photos (Yoruba/Pidgin versions): no second cleanup charge.
