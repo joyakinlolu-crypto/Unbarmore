@@ -935,6 +935,17 @@ try {
     ok('admin: COSTS → "AI cost, last 7 days (estimates)" with a total and a per-shop line', !!r.reply && /AI cost, last 7 days/.test(r.reply.text) && /Ada Fabrics/.test(r.reply.text) && /By kind/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 260));
     r = await ask('scorecard', () => text('SCORECARD'), (v) => /Pilot scorecard|No real shops/.test(v.text));
     ok('admin SCORECARD → the pilot verdict + cohort numbers + a line per real shop (test accounts excluded), ONE message under the size limit', !!r.reply && real(r.all).length === 1 && r.reply.text.length < 4096 && (/No real shops/.test(r.reply.text) || (/Shops:/.test(r.reply.text) && !/Ada Fabrics/.test(r.reply.text))), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+    const has012 = Array.isArray(await (await rest('admin_tokens?select=token_hash&limit=1')).json());
+    if (!has012) console.log('⏭️  ADMIN LINK test skipped: run supabase/migrations/012_admin_console.sql in Supabase, then re-run');
+    else {
+      r = await ask('admin-link', () => text('ADMIN LINK'), (v) => /Admin console/.test(v.text) && /admin\/verify\?token=/.test(v.text));
+      const tok = r.reply?.text.match(/token=([a-f0-9]{64})/)?.[1] ?? '';
+      const stored = tok ? await rows(`admin_tokens?select=token_hash,used_at&order=created_at.desc&limit=1`) : [];
+      ok('admin ADMIN LINK → a single-use link to the admin console (10 minutes); only its HASH is stored, unused', !!tok && /10 minutes/.test(r.reply!.text) && stored[0]?.token_hash !== tok && stored[0]?.used_at === null && /^[a-f0-9]{64}$/.test(stored[0]?.token_hash ?? ''), r.reply?.text.replace(/\n/g, ' | ').slice(0, 120));
+      await rest(`admin_tokens?token_hash=eq.${stored[0]?.token_hash}`, { method: 'DELETE' });
+      await webhook({ type: 'text', text: { body: 'ADMIN LINK' } }, undefined, PH2); await sleep(4000);
+      ok('ADMIN LINK from any other number gives NO link (treated as an ordinary first message)', !sent.slice(-3).map(view).some((v) => /admin\/verify/.test(v.text)));
+    }
   } else {
     r = await ask('costs', () => text('COSTS'), (v) => /not set up|No AI usage/.test(v.text));
     ok('admin: COSTS before migration 008 → says the usage log is not set up (no crash)', !!r.reply, r.reply?.text);

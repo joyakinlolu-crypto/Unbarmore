@@ -4,7 +4,7 @@ import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { db } from './supabase';
-import { SESSION_COOKIE, SESSION_DAYS, signSession, verifySession, type SessionClaims } from './jwt';
+import { ADMIN_COOKIE, SESSION_COOKIE, SESSION_DAYS, VIEWAS_COOKIE, signSession, verifyAdmin, verifySession, verifyViewAs, type SessionClaims } from './jwt';
 
 export const hashToken = (raw: string) => crypto.createHash('sha256').update(raw).digest('hex');
 export const newRawToken = () => crypto.randomBytes(32).toString('hex');
@@ -17,7 +17,10 @@ export interface Business {
   google_sheet_id: string | null; business_category: string | null;
   logo_url: string | null; created_at: string; videos_used_this_month: number;
 }
-export interface Session extends SessionClaims { business: Business }
+/** `readOnly`/`viewingAs`: the platform admin is looking at this shop as its owner would. Every write path must refuse when `readOnly`. */
+export interface Session extends SessionClaims { business: Business; readOnly?: boolean; viewingAs?: boolean }
+
+export const READ_ONLY_MESSAGE = 'Read-only admin view: nothing can be changed here.';
 
 export async function redeemToken(raw: string): Promise<SessionClaims | null> {
   if (!/^[a-f0-9]{64}$/.test(raw)) return null;
@@ -41,7 +44,15 @@ export async function endSession() { (await cookies()).delete(SESSION_COOKIE); }
  * must lose access immediately, not in 30 days.
  */
 export const getSession = cache(async (): Promise<Session | null> => {
-  const claims = await verifySession((await cookies()).get(SESSION_COOKIE)?.value);
+  const jar = await cookies();
+  // Admin "view as shop": needs BOTH a valid admin cookie and a valid view-as cookie. Never writable, never a real user.
+  const viewId = await verifyViewAs(jar.get(VIEWAS_COOKIE)?.value);
+  if (viewId && (await verifyAdmin(jar.get(ADMIN_COOKIE)?.value))) {
+    const { data, error } = await db.from('businesses').select('*').eq('id', viewId).maybeSingle();
+    if (error) throw new Error(`view-as lookup failed: ${error.message}`);
+    return data ? { sub: 'admin', business_id: viewId, role: 'owner', business: data as Business, readOnly: true, viewingAs: true } : null;
+  }
+  const claims = await verifySession(jar.get(SESSION_COOKIE)?.value);
   if (!claims) return null;
   const lookup = () => db.from('business_users').select('id, role, is_active, businesses(*)')
     .eq('id', claims.sub).eq('business_id', claims.business_id).maybeSingle();

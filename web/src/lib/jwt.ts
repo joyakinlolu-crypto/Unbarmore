@@ -32,3 +32,29 @@ export async function verifySession(token: string | undefined): Promise<SessionC
     return null;
   }
 }
+
+// ───────────── Admin console ─────────────
+// Separate cookies and separate JWT issuers: a shop-owner session can never be accepted as an admin session, nor the reverse.
+export const ADMIN_COOKIE = 'unbarmore_admin';
+export const VIEWAS_COOKIE = 'unbarmore_viewas';
+export const ADMIN_HOURS = 8;
+export const VIEWAS_HOURS = 2;
+
+export async function signAdmin(): Promise<string> {
+  return new SignJWT({ role: 'admin' }).setProtectedHeader({ alg: 'HS256' }).setSubject('admin').setIssuedAt().setIssuer('unbarmore-admin').setExpirationTime(`${ADMIN_HOURS}h`).sign(key());
+}
+export async function verifyAdmin(token: string | undefined): Promise<boolean> {
+  if (!token) return false;
+  try { const { payload } = await jwtVerify(token, key(), { algorithms: ['HS256'], issuer: 'unbarmore-admin' }); return payload.sub === 'admin' && payload.role === 'admin'; }
+  catch { return false; }
+}
+
+/** "Look at this shop as its owner would": which shop, for how long. Only honoured together with a valid admin cookie. */
+export async function signViewAs(businessId: string): Promise<string> {
+  return new SignJWT({ business_id: businessId }).setProtectedHeader({ alg: 'HS256' }).setSubject('admin').setIssuedAt().setIssuer('unbarmore-viewas').setExpirationTime(`${VIEWAS_HOURS}h`).sign(key());
+}
+export async function verifyViewAs(token: string | undefined): Promise<string | null> {
+  if (!token) return null;
+  try { const { payload } = await jwtVerify(token, key(), { algorithms: ['HS256'], issuer: 'unbarmore-viewas' }); return typeof payload.business_id === 'string' ? payload.business_id : null; }
+  catch { return null; }
+}

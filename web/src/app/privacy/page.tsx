@@ -96,7 +96,7 @@ export default function Privacy() {
         <H n={8}>How we protect it</H>
         <P>
           Data is encrypted in transit (HTTPS), stored in access-controlled databases that only our servers can read, and file links are short-lived and signed. Sign-in links for the app expire quickly and work once.
-          Access is limited to the people who need it. No system is perfectly secure. If a personal data breach is likely to put your rights at risk, we will notify the NDPC within 72 hours of becoming aware of it, and tell affected people without undue delay when the risk to them is high.
+          Access is limited to the people who need it. For support, an authorised member of our team can open your account in a read-only view, to see what you see and help you fix a problem. They cannot change your records in that view, and every such access is logged. No system is perfectly secure. If a personal data breach is likely to put your rights at risk, we will notify the NDPC within 72 hours of becoming aware of it, and tell affected people without undue delay when the risk to them is high.
         </P>
       </section>
 

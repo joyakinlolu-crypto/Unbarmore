@@ -18,6 +18,7 @@ const notReady = (code: string | undefined) => code === '42P01' || code === 'PGR
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (session.readOnly) return NextResponse.json({ error: 'read_only' }, { status: 403 });
   if (!sameOrigin(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   const sub = parseSubscription(await req.json().catch(() => null));
   if (!sub) return NextResponse.json({ error: 'invalid subscription' }, { status: 400 });
@@ -39,6 +40,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (session.readOnly) return NextResponse.json({ error: 'read_only' }, { status: 403 });
   if (!sameOrigin(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   const body = (await req.json().catch(() => null)) as { endpoint?: unknown } | null;
   if (typeof body?.endpoint !== 'string') return NextResponse.json({ error: 'invalid' }, { status: 400 });

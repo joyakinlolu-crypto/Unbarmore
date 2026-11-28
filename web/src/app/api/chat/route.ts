@@ -23,6 +23,7 @@ async function reportToBot(message: string) {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (session.readOnly) return NextResponse.json({ error: 'read_only' }, { status: 403 }); // an admin looking at a shop must not spend its advisor allowance or write its chat history
   const businessId = session.business_id; // ← only ever from the verified session
 
   const message = String(((await req.json().catch(() => ({}))) as { message?: unknown }).message ?? '').trim();

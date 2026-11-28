@@ -1,6 +1,8 @@
 import { alertAdmin, recentAlerts, takeMissedAlerts } from '../lib/alerts.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { addVideoCredits, db, isInServiceWindow } from '../db/supabase.js';
+import { createHash, randomBytes } from 'node:crypto';
+import { env } from '../config/env.js';
 import { ngn } from '../lib/money.js';
 import { scorecardReply } from './scorecard.js';
 import { signedUrl, uploadFile } from '../db/supabase.js';
@@ -31,6 +33,7 @@ export async function adminAlertCommand(phone: string, text: string): Promise<Re
       return reply(phone).text(`Could not add credits: ${String((e as Error)?.message ?? e).slice(0, 120)} (has migration 008 been run?)`);
     }
   }
+  if (/^admin (?:link|web|login|console)$/i.test(t)) return adminLinkReply(phone);
   const tv = t.match(/^test voice(?:\s+(yoruba|pidgin|english))?$/i);
   if (tv) return testVoiceReply(phone, (tv[1] ?? 'english').toLowerCase());
   const sc = t.match(/^(?:score ?card|pilot)(?:\s+(\d{1,2}))?$/i);
@@ -113,4 +116,19 @@ export async function testVoiceReply(phone: string, lang: string): Promise<Reply
   } catch (e) {
     return reply(phone).text(`☁️ *Google Cloud voice:* ${await cloudVoiceStatus(lang === 'yoruba').catch(() => 'unknown')}`, `🔇 *Voice test (${lang}) FAILED* after ${((Date.now() - t0) / 1000).toFixed(1)}s:`, String((e as Error)?.message ?? e).replace(/\s+/g, ' ').slice(0, 300), '', 'Videos made now will have music only. Check GOOGLE_TTS_CREDENTIALS_JSON / AZURE_SPEECH_KEY.');
   }
+}
+
+/** Admin: ADMIN LINK → a single-use link (10 minutes) that opens the admin console on the web. Only ever sent to ADMIN_PHONE. */
+export async function adminLinkReply(phone: string): Promise<Reply> {
+  const raw = randomBytes(32).toString('hex');
+  const hash = createHash('sha256').update(raw).digest('hex');
+  const { data, error } = await db.rpc('issue_admin_token', { p_token_hash: hash });
+  if (error) return reply(phone).text('Admin links need a quick database update (migration 012). Run it in Supabase, then send ADMIN LINK again.');
+  if (data !== true) return reply(phone).text('Too many admin links requested in the last 10 minutes. Wait a few minutes and try again.');
+  return reply(phone).text(
+    '🔐 *Admin console*',
+    `${env.WEB_APP_URL.replace(/\/$/, '')}/admin/verify?token=${raw}`,
+    '',
+    'One tap, works once, expires in 10 minutes. Don\'t forward it: anyone with it can see every shop.',
+  );
 }

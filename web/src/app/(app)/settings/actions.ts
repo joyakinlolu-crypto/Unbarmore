@@ -1,13 +1,15 @@
 'use server';
 import { revalidatePath } from 'next/cache';
-import { requireSession } from '@/lib/auth';
+import { READ_ONLY_MESSAGE, requireSession } from '@/lib/auth';
 import { db } from '@/lib/supabase';
 
 export type SaveResult = { ok: boolean; message: string };
 const THEMES = ['clean_minimalist', 'luxury_boutique', 'outdoor_lifestyle'];
 
 export async function saveProfile(_prev: SaveResult | null, form: FormData): Promise<SaveResult> {
-  const { business: b } = await requireSession(); // server actions are public endpoints: always re-authenticate
+  const session = await requireSession(); // server actions are public endpoints: always re-authenticate
+  if (session.readOnly) return { ok: false, message: READ_ONLY_MESSAGE };
+  const b = session.business;
   const name = String(form.get('name') ?? '').replace(/\s+/g, ' ').trim();
   const rc = String(form.get('rc') ?? '').trim().replace(/^RC\s*/i, '');
   const theme = String(form.get('theme') ?? b.studio_theme);
