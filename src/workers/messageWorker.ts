@@ -1,3 +1,4 @@
+import { isGreeting, welcomeLines } from '../lib/greeting.js';
 import { helpFromText, helpPicker, helpTopicReply } from '../flows/help.js';
 import { parseHelpCommand } from '../lib/help.js';
 import { calendarReply } from '../flows/calendar.js';
@@ -504,6 +505,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (promise) { const rep = await recordPromise(actor, promise.name, promise.date); if (rep) return rep; }
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
+  if (isGreeting(t)) return welcomeReply(actor);
   const helpCmd = parseHelpCommand(t);
   if (helpCmd) return helpFromText(actor, helpCmd.text);
   if (['MENU', '?'].includes(upper)) return helpMenu(actor);
@@ -600,6 +602,12 @@ function helpMenu(actor: Actor): Reply {
     '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 HELP (stuck? pick your problem)',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
   );
+}
+
+/** The reply to "hi" and to "what can you do": short, the same for everyone, free to produce. */
+function welcomeReply(actor: Actor): Reply {
+  return reply(actor.phone).text(...welcomeLines(actor.business.name))
+    .button('LOGHOW', '📝 Log a sale').button('BTN_CHASE_DEBT', '💬 Chase debts').button('HELP:more', '🆘 Help');
 }
 
 function plansMenu(actor: Actor): Reply {
@@ -810,7 +818,7 @@ async function runBrain(
       return r;
     }
     case 'HELP':
-      return reply(actor.phone).text(brain.reply_text ?? '', '', 'Type MENU to see everything I can do.');
+      return welcomeReply(actor);          // what Unbarmore does: a fixed answer, no model-written text (it used to invent places and promises)
     case 'OFF_TOPIC':
     default:
       return reply(actor.phone).text(
