@@ -237,6 +237,9 @@ async function processVideo(job: Job<VideoJob>): Promise<void> {
     const cleanedPaths: string[] = [];
     // A remake of the same photos (e.g. the Yoruba version) reuses the photos already cleaned for an earlier video: no second ~₦60 per photo.
     const earlier = await priorCleaned(businessId, row.product_id as string, row.raw_image_urls as string[], videoId);
+    // A RETRY of this same job (the queue tries a failed render twice) must not pay again for photos it already cleaned on the first try.
+    const own = (row.cleaned_image_urls as string[] | null) ?? [];
+    for (let i = 0; i < raw.length; i++) if (own[i]) earlier[i] = own[i]!;
     const localImages = await Promise.all(raw.map(async (p, i) => {
       if (earlier[i]) {
         try {
