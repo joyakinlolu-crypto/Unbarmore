@@ -78,7 +78,7 @@ import { PLANS } from '../config/plans.js';
 import { createQuote, payDetailsReply, quoteCancel, quoteExtend, quotePaid, quotesListReply } from '../flows/quotes.js';
 import { quotesDue } from '../flows/quotesDue.js';
 import { composeMorning } from '../flows/morning.js';
-import { flyerCaption, isFlyerCaption, pickPalette } from '../flows/flyer.js';
+import { flyerCaption, isFlyerCaption, parseFlyerOptions, pickPalette, pickTag } from '../flows/flyer.js';
 import { daysLeft, extendedUntil, expiryPhrase, parsePayDetailsCommand, parseQuoteCommand, quoteLabel, quoteTotal, validUntil } from '../lib/quote.js';
 import { PALETTES, renderFlyer, renderLogo, wrapText } from '../services/flyer.js';
 import { quotePdf } from '../services/pdfGenerator.js';
@@ -259,6 +259,13 @@ describe('7 AM note: expiring quotes', () => {
   });
 });
 
+describe('logos: made-for-you versus the owner\'s own', () => {
+  it('generated logos are stored under a different name, so a real logo can always be told apart', async () => {
+    const real = await vi.importActual<typeof import('../flows/branding.js')>('../flows/branding.js').catch(() => null);
+    if (real) { expect(real.isGeneratedLogo({ logo_url: 'abc/logo-auto.png' })).toBe(true); expect(real.isGeneratedLogo({ logo_url: 'abc/logo.png' })).toBe(false); expect(real.isGeneratedLogo({ logo_url: 'none' })).toBe(false); expect(real.isGeneratedLogo({ logo_url: null })).toBe(false); }
+  });
+});
+
 describe('plans: what each tier gets', () => {
   it('quote validity windows are on trial/Starter/Growth, off on the free plan', () => {
     expect([PLANS.trial.quoteExpiry, PLANS.starter_5k.quoteExpiry, PLANS.growth_15k.quoteExpiry, PLANS.free_limited.quoteExpiry]).toEqual([true, true, true, false]);
@@ -276,6 +283,15 @@ describe('free flyer + logo (no AI, no cost)', () => {
     expect(pickPalette('flyer gele 5k navy')).toEqual({ caption: 'flyer gele 5k', palette: 1 });
     expect(pickPalette('flyer gele 5k WINE')).toEqual({ caption: 'flyer gele 5k', palette: 2 });
     expect(pickPalette('flyer gele 5k')).toEqual({ caption: 'flyer gele 5k', palette: 0 });
+  });
+  it('SALE / NEW / RESTOCK change the headline; colour and tag work in either order and never end up in the product name', () => {
+    expect(pickTag('flyer gele 5k sale')).toEqual({ caption: 'flyer gele 5k', tag: 'SALE' });
+    expect(pickTag('flyer gele 5k NEW')).toEqual({ caption: 'flyer gele 5k', tag: 'NEW ARRIVAL' });
+    expect(pickTag('flyer gele 5k restock')).toEqual({ caption: 'flyer gele 5k', tag: 'BACK IN STOCK' });
+    expect(parseFlyerOptions('flyer gele 5k sale navy')).toEqual({ caption: 'flyer gele 5k', palette: 1, tag: 'SALE' });
+    expect(parseFlyerOptions('flyer gele 5k wine new')).toEqual({ caption: 'flyer gele 5k', palette: 2, tag: 'NEW ARRIVAL' });
+    expect(parseFlyerOptions('flyer gele 5k')).toEqual({ caption: 'flyer gele 5k', palette: 0, tag: undefined });
+    expect(parseFlyerOptions('flyer new look gown 15k')).toMatchObject({ tag: undefined });       // "new" in the middle is part of the name
   });
   it('long names wrap onto at most two lines and never overflow', () => {
     expect(wrapText('Premium Ankara Gown Two Piece Set', 20, 2)).toEqual(['Premium Ankara Gown', 'Two Piece Set']);

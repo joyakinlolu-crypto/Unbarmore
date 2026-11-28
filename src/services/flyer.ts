@@ -40,6 +40,8 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd
 export interface FlyerInput {
   photo: Buffer; businessName: string; product: string; priceNgn: number | null;
   contact: string | null; logo?: Buffer | null; footer: boolean; palette?: number;
+  /** Headline pill: AVAILABLE NOW (default), SALE, NEW ARRIVAL, BACK IN STOCK. */
+  tag?: string;
 }
 
 export async function renderFlyer(i: FlyerInput): Promise<Buffer> {
@@ -64,7 +66,7 @@ export async function renderFlyer(i: FlyerInput): Promise<Buffer> {
       draws.push(`drawtext=fontfile=${FONT}:textfile=${tf}:fontsize=${size}:fontcolor=${color}:x=(w-text_w)/2:y=${y}${extra}`);
     };
     await text('biz.txt', biz, bizSize, 70, 'white');
-    await text('tag.txt', 'AVAILABLE NOW', 46, 170, pal.ink, `:box=1:boxcolor=${pal.accent}:boxborderw=16`);
+    await text('tag.txt', i.tag ?? 'AVAILABLE NOW', 46, 170, pal.ink, `:box=1:boxcolor=${pal.accent}:boxborderw=16`);
     let y = 1330;
     for (const [n, line] of nameLines.entries()) { await text(`n${n}.txt`, line, nameSize, y, 'white'); y += lineH; }
     if (i.priceNgn && i.priceNgn > 0) { await text('price.txt', ngn(i.priceNgn), 110, y + 24, pal.ink, `:box=1:boxcolor=${pal.accent}:boxborderw=28`); y += 200; }

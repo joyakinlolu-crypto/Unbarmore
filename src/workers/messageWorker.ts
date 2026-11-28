@@ -30,7 +30,7 @@ import { occurredAt } from '../lib/sentAt.js';
 import { cashCountReply, splitCommandReply } from '../flows/cashCount.js';
 import { createQuote, payDetailsReply, quoteCancel, quoteExtend, quotePaid, quotesListReply } from '../flows/quotes.js';
 import { parsePayDetailsCommand, parseQuoteCommand } from '../lib/quote.js';
-import { FLYER_HELP, FLYER_PER_DAY, flyerReply, isFlyerCaption, logoColourPicker, makeLogoReply, pickPalette } from '../flows/flyer.js';
+import { FLYER_HELP, FLYER_PER_DAY, flyerReply, isFlyerCaption, logoColourPicker, makeLogoReply, parseFlyerOptions } from '../flows/flyer.js';
 import { parseCount } from '../lib/cashCount.js';
 import { remakeLastVideo, startVideo } from '../flows/video.js';
 import { detectVoice, parseVideoCaption, type Voice } from '../lib/videoCaption.js';
@@ -139,10 +139,13 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
   const photoId = msg.type === 'image' ? msg.image?.id : msg.type === 'document' && msg.document?.mime_type?.startsWith('image/') ? msg.document.id : null;
   if (photoId && !actor.isStaff) {
     const waiting = await redis.getdel(AWAIT_LOGO_KEY(phone));
-    if (waiting !== null) {
+    // A photo whose caption says "logo" is a logo, whether or not the owner typed LOGO first.
+    const saidLogo = /\blogo\b/i.test((msg.type === 'image' ? msg.image?.caption : msg.document?.caption) ?? '');
+    if (waiting !== null || saidLogo) {
+      const keep = waiting ?? '-';
       try { await saveLogo(actor, (await downloadMedia(photoId)).data); }
-      catch { await redis.set(AWAIT_LOGO_KEY(phone), waiting, 'EX', AWAIT_LOGO_TTL_S); return reply(phone).text('I couldn\'t read that picture. Please send your logo again as a normal photo.'); }
-      return waiting !== '-' ? customerReceiptReply(actor, waiting) : reply(phone).text('✅ Logo saved. It now appears at the top of your receipts and statements.');
+      catch { await redis.set(AWAIT_LOGO_KEY(phone), keep, 'EX', AWAIT_LOGO_TTL_S); return reply(phone).text('I couldn\'t read that picture. Please send your logo again as a normal photo (or as a file).'); }
+      return keep !== '-' ? customerReceiptReply(actor, keep) : reply(phone).text('✅ *Your logo is saved.* It now appears at the top of your receipts, quotes and statements.', 'Wrong picture? Send *LOGO* and try again.');
     }
   }
 
@@ -320,7 +323,7 @@ async function painReply(actor: Actor, kind: 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_
         '🚀 *Easiest start:* tell me your last sale, the way you\'d tell a friend. Type or send a voice note:',
         '_sold 2 bags rice 30k cash_',
         '',
-        'Or send 2–3 product photos and I\'ll make a sales video for you.',
+        'Or send 2–3 product photos and I\'ll make a sales video for you, or one photo with *flyer Ankara gown 15k* for a free "Available now" picture.',
       ];
   return reply(actor.phone).text(
     ...body,
@@ -611,6 +614,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       const batch = b2 && b2 !== '-' ? b2 : null;
       if (a === 'ask') { await redis.set(AWAIT_LOGO_KEY(actor.phone), batch ?? '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
       if (a === 'make') return logoColourPicker(actor.phone, batch);
+      if (a === 'keep') return reply(actor.phone).text('👍 Done. This logo stays on your receipts and quotes. You can change it any time: send a photo with the word *logo*.');
       await useNameAsLogo(actor);
       return batch ? customerReceiptReply(actor, batch) : reply(actor.phone).text('✅ Done. Your business name is your logo on receipts.');
     }
@@ -710,6 +714,12 @@ async function runBrain(
         clarification: brain.clarification_needed,
         prefix: brain.transcript ? `🎙️ _"${brain.transcript.slice(0, 200)}"_\n` : undefined,
       });
+    }
+    case 'SAVE_LOGO': {
+      if (!input.image) return reply(actor.phone).text('Send your logo as a photo with the word *logo* as the caption.');
+      if (actor.isStaff) return reply(actor.phone).text('Only the owner can change the logo.');
+      try { await saveLogo(actor, input.image.data); } catch { return reply(actor.phone).text('I couldn\'t read that picture. Please send your logo again as a normal photo.'); }
+      return reply(actor.phone).text('✅ *That looks like your logo, so I saved it.* It now appears on your receipts, quotes and statements.', 'It was a product photo? Say *LOGO REMOVE*, then send the photo again with a caption like _Ankara gown 15k_.');
     }
     case 'CREATE_QUOTE': return brain.quote ? createQuote(actor, brain.quote) : reply(actor.phone).text('Tell me the customer, the items and prices, like: _quote for Mama Tunde: 2 lace 50k each and 1 gele 5k, valid 3 days_');
     case 'RECORD_DEBTS': return proposeDebts(actor, redis, brain.debts);
@@ -848,8 +858,8 @@ export async function flushImageBatch(phone: string): Promise<void> {
   // "update my product prices" (and, for a single photo, silently dropped the picture).
   if (isFlyerCaption(caption)) {
     const { ok } = await dailyCount(redis, `flyer:${phone}:${watDateKey()}`, FLYER_PER_DAY);
-    const pick = pickPalette(caption);
-    r = ok ? await flyerReply(actor, images[0]!.data, pick.caption, pick.palette)
+    const pick = parseFlyerOptions(caption);
+    r = ok ? await flyerReply(actor, images[0]!.data, pick.caption, pick.palette, pick.tag)
            : reply(phone).text(`You've made ${FLYER_PER_DAY} pictures today. Try again tomorrow.`);
     await sendReplySafely(r, phone);
     return;

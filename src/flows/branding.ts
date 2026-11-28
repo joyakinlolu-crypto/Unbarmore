@@ -57,10 +57,13 @@ export async function normaliseLogo(data: Buffer): Promise<Buffer> {
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 }
 
+/** Logos we drew for the owner are stored as logo-auto.png, so a real, uploaded logo can always be told apart. */
+export const isGeneratedLogo = (b: Pick<Business, 'logo_url'>) => !!b.logo_url && /logo-auto\.png$/.test(b.logo_url);
+
 /** Save the owner's logo. Returns the storage path. */
-export async function saveLogo(actor: Actor, image: Buffer): Promise<string> {
+export async function saveLogo(actor: Actor, image: Buffer, opts: { generated?: boolean } = {}): Promise<string> {
   const png = await normaliseLogo(image);
-  const p = await uploadFile(BUCKET, `${actor.business.id}/logo.png`, png, 'image/png');
+  const p = await uploadFile(BUCKET, `${actor.business.id}/${opts.generated ? 'logo-auto' : 'logo'}.png`, png, 'image/png');
   await updateBusiness(actor.business.id, { logo_url: p });
   actor.business.logo_url = p;
   return p;

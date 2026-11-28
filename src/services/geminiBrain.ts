@@ -52,7 +52,7 @@ export const NOT_SUPPORTED_KINDS = ['I_OWE_SUPPLIER', 'OPENING_CASH', 'BANK_BALA
 export const BrainSchema = z.object({
   intent: z.enum([
     'LOG_TRANSACTION', 'RECORD_DEBTS', 'SET_PRODUCTS', 'UPDATE_CUSTOMER', 'RECORD_CLIENTS', 'CUSTOMER_OUTREACH', 'VERIFY_BANK_ALERT', 'DRAFT_SALES_REPLY', 'CREATE_VIDEO_SCRIPT',
-    'QUERY_BUSINESS', 'CHASE_DEBTS', 'CREATE_QUOTE', 'UNDO_LAST', 'CORRECT_LAST', 'NOT_SUPPORTED', 'BUSINESS_ADVICE', 'ACKNOWLEDGE', 'HELP', 'OFF_TOPIC',
+    'QUERY_BUSINESS', 'CHASE_DEBTS', 'CREATE_QUOTE', 'SAVE_LOGO', 'UNDO_LAST', 'CORRECT_LAST', 'NOT_SUPPORTED', 'BUSINESS_ADVICE', 'ACKNOWLEDGE', 'HELP', 'OFF_TOPIC',
   ]),
   language: z.enum(['english', 'pidgin', 'yoruba', 'hausa', 'igbo']).describe('Language the user spoke/wrote in. Reply in the same register.'),
   transcript: z.string().optional().describe('Verbatim transcript if input was a voice note.'),
@@ -233,6 +233,7 @@ Classify the message into exactly one intent and fill ONLY that intent's field:
 - CREATE_VIDEO_SCRIPT → "video_request". User wants an ad/video/promo for a product. Extract any name, price, delivery info.
 - QUERY_BUSINESS → "query". QUESTIONS about their own recorded numbers: profit, who owes (all, or one named customer via customer_name), best sellers, best customers, slow stock, expenses, stock left, cash today, "my customers / my client list" (kind customers), "who has stopped buying / my inactive customers" (kind lapsed_customers). A question has a question form ("who owes me?", "how much does Femi owe?"); a statement of debts is RECORD_DEBTS.
 - CREATE_QUOTE → "quote". The owner asks you to make a QUOTE, INVOICE or PROFORMA for a customer: "make an invoice for Mama Tunde, 2 lace at 50k each and 1 gele 5k", "send Ada a quote for 3 bags of rice 45k each, valid for 3 days, delivery 2k". lines = one entry per item with the quantity and the price of ONE unit (if only a line total is given, divide it by the quantity). valid_days only if they say how long the price holds. This is NOT a sale: nothing is recorded until the customer pays. A sale that already HAPPENED ("sold 2 lace 50k") is LOG_TRANSACTION, never CREATE_QUOTE. A request for a receipt for a past sale is not a quote.
+- SAVE_LOGO → no field. ONLY when an image is attached and it is clearly a business LOGO or brand mark: flat artwork such as an emblem, monogram or wordmark on a plain or simple background, usually with the business name in stylised letters, and NOTHING else is being asked. A photo of goods, people, a shop, a document, a receipt or a bank screenshot is NEVER SAVE_LOGO. A photo of a product with a label on it is a product photo. If you are unsure, it is not a logo.
 - CHASE_DEBTS → no field. They want reminder messages for people who OWE THEM money ("remind everyone owing me", "chase my debtors"). Messaging all customers in general ("message all my customers", promotions, broadcasts) is NOT_SUPPORTED with not_supported=OTHER, never CHASE_DEBTS.
 - UNDO_LAST → no field. They want the last entry removed ("delete the last entry", "cancel that").
 - CORRECT_LAST → no field. They say the last entry had a wrong amount or detail ("that last one was 25k not 35k").

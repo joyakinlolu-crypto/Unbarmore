@@ -417,7 +417,25 @@ try {
     ok('MAKE LOGO → 3 colour buttons', !!r.reply && r.reply.buttons.length === 3);
     r = await ask('logo-colour', () => button(r.reply!.buttons[1]!.id), (v) => v.header?.type === 'image');
     const lg = (await rows(`businesses?id=eq.${biz!.id}&select=logo_url`))[0]?.logo_url;
-    ok('pick a colour → the logo image comes back AND is saved as the shop logo', !!r.reply && /Your logo is ready/.test(r.reply.text) && typeof lg === 'string' && lg.endsWith('logo.png'), lg);
+    ok('pick a colour → the logo image comes back AND is saved as the shop logo', !!r.reply && /Your logo is ready/.test(r.reply.text) && typeof lg === 'string' && /logo-auto\.png$/.test(lg) && r.reply.buttons.map((b) => b.id).join() === 'LOGO:ask:-,LOGO:keep:-', lg);
+  }
+
+  // ───── 12d2. the owner's OWN logo is accepted without typing LOGO first (a real user complained his logo was ignored) ─────
+  {
+    const logoOf = async () => String((await rows(`businesses?id=eq.${biz!.id}&select=logo_url`))[0]?.logo_url ?? '');
+    r = await ask('logo-keep', () => button('LOGO:keep:-'), (v) => /stays on your receipts/.test(v.text));
+    ok('the "👍 Keep this one" button on a made-for-you logo answers (it used to fall through to "use my name")', !!r.reply && /logo-auto\.png$/.test(await logoOf()));
+    media.set('OWNLOGO', { data: fs.readFileSync(path.join(tmp, 'fly.jpg')), mime: 'image/jpeg' });
+    r = await ask('own-logo', () => webhook({ type: 'image', image: { id: 'OWNLOGO', mime_type: 'image/jpeg', caption: 'my logo' } }), (v) => /Your logo is saved/.test(v.text), 60_000);
+    ok('a photo captioned "my logo" is saved as the shop logo with NO need to type LOGO first, replacing the made-for-you one', !!r.reply && /\/logo\.png$/.test(await logoOf()) && !/logo-auto/.test(await logoOf()), await logoOf());
+    const lq = path.join(tmp, 'brand.png');
+    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=0x14213D:s=512x512', '-vf', "drawtext=fontfile=assets/fonts/DejaVuSans-Bold.ttf:text='AF':fontsize=230:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2", '-frames:v', '1', lq]);
+    media.set('BRANDPNG', { data: fs.readFileSync(lq), mime: 'image/png' });
+    await rest(`businesses?id=eq.${biz!.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ logo_url: `${biz!.id}/logo-auto.png` }) });
+    r = await ask('logo-by-sight', () => webhook({ type: 'image', image: { id: 'BRANDPNG', mime_type: 'image/png' } }), (v) => /looks like your logo|Your logo is saved/.test(v.text) || v.kind === 'interactive' || v.text.length > 0, 90_000);
+    ok('a logo-like picture sent with no caption is recognised by the AI and saved as the logo (soft check: AI judgement)', !!r.reply && /looks like your logo/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 160));
+    const f2 = await ask('flyer-sale', () => webhook({ type: 'image', image: { id: 'FLY1', mime_type: 'image/jpeg', caption: 'flyer Ankara gown 15k sale navy' } }), (v) => v.header?.type === 'image', 60_000);
+    ok('flyer with SALE and NAVY → a finished picture back', !!f2.reply && /Ankara gown/i.test(f2.reply.text));
   }
 
   // ───── 12e. referral wallet: ₦1,000 cash-out minimum (needs migrations 003 + 009 on the database) ─────
