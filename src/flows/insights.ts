@@ -1,6 +1,7 @@
 /**
  * Every number a user sees is computed here from PostgreSQL. The LLM only chooses WHICH query.
  */
+import { completenessFor } from './completeness.js';
 import {
   db, debtors, deadStock, expensesByCategory, ledgerSummary, lowStock, topProducts, type Business,
 } from '../db/supabase.js';
@@ -54,7 +55,8 @@ export async function answerQuery(
     case 'cash_today': {
       const s = await ledgerSummary(b.id, from, to);
       if (s.tx_count === 0) return `No confirmed records ${label} yet. Send a voice note like "sold 2 lace 50k" to start.`;
-      return profitBlock(`${b.name}: ${label}`, s).join('\n');
+      const how = await completenessFor(b.id, from, to, s);
+      return [...profitBlock(`${b.name}: ${label}`, s), ...(how ? ['', how] : [])].join('\n');
     }
     case 'debtors': {
       if (q.customer_name) {

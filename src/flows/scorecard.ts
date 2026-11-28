@@ -1,3 +1,4 @@
+import { videoResultsLine } from './videoResults.js';
 import { db } from '../db/supabase.js';
 import { watDateKey } from '../lib/money.js';
 import { buildScorecard, scorecardText, type ShopFacts } from '../lib/scorecard.js';
@@ -72,7 +73,8 @@ export async function scorecardReply(phone: string, days = 7): Promise<Reply> {
   try {
     const facts = await gatherScorecard(d);
     if (!facts.length) return reply(phone).text('📋 No real shops yet. Share your WhatsApp number with your first testers.');
-    return reply(phone).text(...scorecardText(buildScorecard(facts), d));
+    const vr = await videoResultsLine();
+    return reply(phone).text(...scorecardText(buildScorecard(facts), d), ...(vr ? ['', vr] : []));
   } catch (e) {
     return reply(phone).text(`Could not build the scorecard: ${String((e as Error)?.message ?? e).slice(0, 140)}`);
   }

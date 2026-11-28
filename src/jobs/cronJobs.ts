@@ -1,3 +1,4 @@
+import { claimDueFollowup } from '../flows/videoResults.js';
 import { Worker } from 'bullmq';
 import { env } from '../config/env.js';
 import { PLANS, TRIAL_DAYS } from '../config/plans.js';
@@ -88,6 +89,9 @@ async function dailyMorning(): Promise<void> {
       const r = reply(biz.owner_phone).text(...msg.lines);
       for (const btn of msg.buttons) r.button(btn.id, btn.title);
       await r.send().catch(() => undefined);
+      // Once per video, 3–10 days after it was made: did it bring a customer? Inside the free window, only after the main note.
+      const ask = await claimDueFollowup(biz.id, biz.owner_phone);
+      if (ask) await ask.send().catch(() => undefined);
     } catch (err) {
       console.error('[cron:daily-morning]', s.business_id, err);
     }

@@ -1,3 +1,4 @@
+import { completenessFor } from './completeness.js';
 import {
   consumeQuota, deadStock, debtors, expensesByCategory, ledgerSummary, signedUrl, topProducts, uploadFile, db,
   type Actor, type Business,
@@ -26,6 +27,8 @@ export interface WeeklyReport {
   /** All-time debt collected + margin protected; undefined only in hand-built test fixtures. */
   moneyBack?: MoneyBack;
   periodLabel: string;
+  /** "This is based on 5 of 6 days with records…": see lib/completeness.ts. */
+  completeness?: string | null;
 }
 
 /** "Week" for a Sunday 6 PM report = Monday 00:00 → now (WAT). */
@@ -58,6 +61,7 @@ export async function buildWeeklyReport(b: Business): Promise<WeeklyReport> {
     topProducts: top,
     valueRecovered: Number(b.total_value_recovered_ngn),
     moneyBack: mb,
+    completeness: await completenessFor(b.id, cur.from, cur.to, s).catch(() => null),
     periodLabel: `${fmt(cur.from)} → ${fmt(new Date(cur.to.getTime() - 1))} (${watWeekKey()})`,
   };
 }
@@ -71,6 +75,7 @@ export function reportText(b: Business, r: WeeklyReport): string[] {
       ? `Sales ${ngn(r.revenue)} · Cost of goods ${ngn(r.cogs)} · Running costs ${ngn(r.expenses)}`
       : `Sales ${ngn(r.revenue)} · Costs ${ngn(r.expenses + r.restock)}`,
     `*${r.trueProfit ? 'Profit' : 'Cash left'}: ${profitPhrase(profitView({ revenue_ngn: r.revenue, expenses_ngn: r.expenses, restock_ngn: r.restock, net_profit_ngn: r.netProfit, ...(r.trueProfit ? { cogs_ngn: r.cogs, unpriced_revenue_ngn: r.unpriced } : {}) }))}*`,
+    r.completeness ?? '',
     r.trueProfit && r.restock > 0 ? `_Stock bought this week: ${ngn(r.restock)} (on your shelf, not a cost)_` : '',
     ...r.anomalies.slice(0, 2).map((a) => `⚠️ ${a.category} up ${Math.round(a.changePct)}% (${ngn(a.amount)})`),
     owed > 0 ? `💳 ${r.debtors.length} customer${r.debtors.length > 1 ? 's' : ''} owe you ${ngn(owed)}` : '💳 Nobody owes you 🎉',

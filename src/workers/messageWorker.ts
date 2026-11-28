@@ -1,3 +1,4 @@
+import { recordVideoResult } from '../flows/videoResults.js';
 import { DelayedError, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
@@ -651,6 +652,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     case 'QPM': return quotePaid(actor, { id: a }, (['cash', 'transfer', 'pos'] as const).find((m) => m === b2) ?? null, c2 && /^\d+$/.test(c2) ? Number(c2) : null);
     case 'QEXT': return quoteExtend(actor, { id: a }, 3);
     case 'QCAN': return quoteCancel(actor, { id: a });
+    case 'VRES': return recordVideoResult(actor, a, b2);
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');
     case 'BUYV1': case 'BUYV3': return actor.isStaff ? reply(actor.phone).text('Only the owner can buy video credits.') : startCreditPurchase(actor, kind);
