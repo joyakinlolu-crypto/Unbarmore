@@ -20,7 +20,7 @@ export interface MorningFacts {
   debts: DueDebt[];
   quiet: { name: string; days: number; spent: number }[];
   lowStock: { name: string; left: number }[];
-  /** Open quotes that expire tomorrow/today or expired yesterday (Starter+ only: free quotes have no expiry). */
+  /** Open invoices that expire tomorrow/today or expired yesterday (Starter+ only: free invoices have no expiry). */
   quotes?: QuoteDue[];
   /** Items that will sell out within days at their real selling speed (see lib/runOut.ts). Preferred over the flat lowStock line. */
   runningOut?: RunOut[];
@@ -72,10 +72,10 @@ function debtLine(d: DueDebt): string {
 
 const whoFor = (q: QuoteDue) => `${q.label}${q.customer ? ` (${q.customer}, ${ngn(q.total)})` : ` (${ngn(q.total)})`}`;
 const quoteWhen = (left: number) => (left < 0 ? 'expired yesterday' : left === 0 ? 'expires today' : 'expires tomorrow');
-function quoteLine(q: QuoteDue): string { return `• Quote ${whoFor(q)} ${quoteWhen(q.left)}`; }
+function quoteLine(q: QuoteDue): string { return `• Invoice ${whoFor(q)} ${quoteWhen(q.left)}`; }
 function quoteFocus(q: QuoteDue): string {
   return q.left < 0
-    ? `👉 *Quote ${q.label} has expired.* Did they pay? Say *${q.label} PAID*, or give more time: *${q.label} EXTEND 3*.`
+    ? `👉 *Invoice ${q.label} has expired.* Did they pay? Say *${q.label} PAID*, or give more time: *${q.label} EXTEND 3*.`
     : `👉 *Ask ${q.customer ?? 'the customer'} to pay ${q.label} ${q.left === 0 ? 'today' : 'before it expires tomorrow'}.* Or say *${q.label} EXTEND 3* to hold the price longer.`;
 }
 

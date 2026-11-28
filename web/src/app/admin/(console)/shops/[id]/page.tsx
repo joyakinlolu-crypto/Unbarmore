@@ -64,7 +64,7 @@ export default async function ShopPage({ params }: { params: Promise<{ id: strin
         <Money title="Last 30 days" v={d.month} cashIn={d.cashInMonth} />
         <Money title="Since day one" v={d.allTime} />
       </div>
-      <p className="text-xs text-slate-400">These are the same numbers the owner sees. Debt collected in the last 30 days: {ngn(d.debtCollectedMonth)}. Open quotes: {d.quotesOpen}.</p>
+      <p className="text-xs text-slate-400">These are the same numbers the owner sees. Debt collected in the last 30 days: {ngn(d.debtCollectedMonth)}. Open invoices: {d.quotesOpen}.</p>
 
       <section className="rounded-2xl bg-white p-4 shadow-sm"><h2 className="mb-3 font-semibold">Manage</h2><ShopActions id={id} tier={s.tier} /></section>
 

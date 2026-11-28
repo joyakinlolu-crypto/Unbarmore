@@ -371,9 +371,9 @@ try {
   const b011 = Array.isArray(await (await rest('quotes?select=id&limit=1')).json());
   if (!b011) console.log('⏭️  quote tests skipped: run supabase/migrations/011_quotes_and_pay_details.sql in Supabase, then re-run');
   else {
-    r = await ask('quote', () => text('make a quote for Mama Tunde: 2 lace at 50k each and 1 gele 5k, delivery 2k, valid for 5 days'), (v) => v.kind === 'interactive' && v.buttons.some((b) => b.id.startsWith('QPAID:')), 90_000);
+    r = await ask('quote', () => text('make an invoice for Mama Tunde: 2 lace at 50k each and 1 gele 5k, delivery 2k, valid for 5 days'), (v) => v.kind === 'interactive' && v.buttons.some((b) => b.id.startsWith('QPAID:')), 90_000);
     const qt = r.reply?.text ?? '';
-    ok('"make a quote for Mama Tunde…" → ONE message: a PDF + the lines + ₦107,000 + held-until date + Mark paid / Extend / Cancel', !!r.reply && real(r.all).length === 1 && r.reply.header?.type === 'document' && /Q-001/.test(qt) && /Mama Tunde/.test(qt) && /107,000/.test(qt) && /Price held until/.test(qt) && r.reply.buttons.map((b) => b.id.split(':')[0]).join() === 'QPAID,QEXT,QCAN', qt.replace(/\n/g, ' | ').slice(0, 240));
+    ok('"make an invoice for Mama Tunde…" → ONE message: a PDF + the lines + ₦107,000 + held-until date + Mark paid / Extend / Cancel', !!r.reply && real(r.all).length === 1 && r.reply.header?.type === 'document' && /INV-001/.test(qt) && /Mama Tunde/.test(qt) && /107,000/.test(qt) && /Valid until/.test(qt) && r.reply.buttons.map((b) => b.id.split(':')[0]).join() === 'QPAID,QEXT,QCAN', qt.replace(/\n/g, ' | ').slice(0, 240));
     if (r.reply?.header?.link) {
       const pdf = Buffer.from(await (await fetch(r.reply.header.link)).arrayBuffer());
       ok('the quote link downloads a real PDF', pdf.subarray(0, 4).toString() === '%PDF' && pdf.length > 2500, `${pdf.length} bytes`);
@@ -385,18 +385,18 @@ try {
 
     r = await ask('account', () => text('MY ACCOUNT GTBank 0123456789 Ada Fabrics'), (v) => /Pay to/.test(v.text));
     ok('MY ACCOUNT GTBank 0123456789 Ada Fabrics → saved, shown on every new quote', !!r.reply && (await rows(`businesses?id=eq.${biz!.id}&select=pay_details`))[0]?.pay_details === 'GTBank 0123456789 Ada Fabrics');
-    r = await ask('quotes', () => text('QUOTES'), (v) => /Open quotes/.test(v.text));
-    ok('QUOTES lists Q-001 with the total waiting and the days left', !!r.reply && /Q-001/.test(r.reply.text) && /107,000/.test(r.reply.text) && /days left/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
-    r = await ask('extend', () => text('Q-001 EXTEND 7'), (v) => v.header?.type === 'document' && /extended/i.test(v.text));
-    ok('"Q-001 EXTEND 7" → a NEW PDF to forward, with the later date', !!r.reply && /Q-001 extended to/.test(r.reply.text));
-    r = await ask('paid-ask', () => text('Q-001 PAID'), (v) => v.buttons.some((b) => b.id.startsWith('QPM:')));
-    ok('"Q-001 PAID" → asks HOW they paid (transfer / cash / POS) before recording anything', !!r.reply && r.reply.buttons.length === 3 && (await rows(`quotes?business_id=eq.${biz!.id}&select=status`))[0]?.status === 'open');
+    r = await ask('quotes', () => text('INVOICES'), (v) => /Open invoices/.test(v.text));
+    ok('INVOICES lists INV-001 with the total waiting and the days left', !!r.reply && /INV-001/.test(r.reply.text) && /107,000/.test(r.reply.text) && /days left/.test(r.reply.text), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+    r = await ask('extend', () => text('INV-001 EXTEND 7'), (v) => v.header?.type === 'document' && /extended/i.test(v.text));
+    ok('"INV-001 EXTEND 7" → a NEW PDF to forward, with the later date', !!r.reply && /INV-001 extended to/.test(r.reply.text));
+    r = await ask('paid-ask', () => text('INV-001 PAID'), (v) => v.buttons.some((b) => b.id.startsWith('QPM:')));
+    ok('"INV-001 PAID" → asks HOW they paid (transfer / cash / POS) before recording anything', !!r.reply && r.reply.buttons.length === 3 && (await rows(`quotes?business_id=eq.${biz!.id}&select=status`))[0]?.status === 'open');
     r = await ask('paid-cash', () => button(r.reply!.buttons.find((b) => b.id.endsWith(':cash'))!.id), (v) => /marked paid/.test(v.text));
-    ok('tap Cash → sale recorded (₦107,000 incl. delivery), profit line shown, "Q-001 marked paid (cash)", ONE message', !!r.reply && /Saved/.test(r.reply.text) && /Q-001 marked paid \(cash\)/.test(r.reply.text) && real(r.all).length === 1, r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+    ok('tap Cash → sale recorded (₦107,000 incl. delivery), profit line shown, "INV-001 marked paid (cash)", ONE message', !!r.reply && /Saved/.test(r.reply.text) && /INV-001 marked paid \(cash\)/.test(r.reply.text) && real(r.all).length === 1, r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
     const saleRows = await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&payment_method=eq.cash&or=(description.ilike.*Lace*,description.ilike.*Gele*,description.eq.Delivery)&select=description,total_amount_ngn,amount_paid_ngn`);
     ok('database: the quote became sale lines (Lace ₦100,000, Gele ₦5,000, Delivery ₦2,000), fully paid in cash, and the quote is closed', saleRows.length >= 3 && saleRows.some((x: any) => Number(x.total_amount_ngn) === 100000) && saleRows.every((x: any) => Number(x.total_amount_ngn) === Number(x.amount_paid_ngn)) && (await rows(`quotes?business_id=eq.${biz!.id}&select=status,paid_method`))[0]?.status === 'paid', JSON.stringify(saleRows).slice(0, 200));
     const sBefore = (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length;
-    r = await ask('paid-twice', () => text('Q-001 PAID cash'), (v) => /already marked paid/.test(v.text));
+    r = await ask('paid-twice', () => text('INV-001 PAID cash'), (v) => /already marked paid/.test(v.text));
     ok('saying PAID a second time records nothing more', !!r.reply && (await rows(`transactions?business_id=eq.${biz!.id}&status=eq.confirmed&select=id`)).length === sBefore);
 
     // free flyer: one product photo with a caption → an image back, no AI call, no cost

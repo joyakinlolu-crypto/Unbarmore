@@ -65,7 +65,7 @@ describe('the WhatsApp text', () => {
   it('verdict first, one line per shop, readable, and always under WhatsApp\'s size limit even with 60 shops', () => {
     const t = scorecardText(buildScorecard([shop({ name: 'Ada Fabrics', quotes: 2, counts: 3 }), shop({ name: 'Kalu', costPricesSet: false, firstEntryAt: null, activeDates: [], entries: 0, lastInboundAt: null, ageDays: 4 })], NOW), 7).join('\n');
     expect(t.indexOf('Pilot scorecard')).toBeLessThan(t.indexOf('Shops:'));
-    for (const s of ['4/7 days', '20 entries', 'collected ₦14,000', '3 receipts', '2 quotes', '3 counts', 'never started', 'No cost prices', 'never seen', 'seen 4h ago']) expect(t).toContain(s);
+    for (const s of ['4/7 days', '20 entries', 'collected ₦14,000', '3 receipts', '2 invoices', '3 counts', 'never started', 'No cost prices', 'never seen', 'seen 4h ago']) expect(t).toContain(s);
     const big = scorecardText(buildScorecard(Array.from({ length: 60 }, (_, i) => shop({ name: `Shop number ${i} with a fairly long business name`, quotes: 5, counts: 5 })), NOW), 7).join('\n');
     expect(big.length).toBeLessThan(4000); expect(big).toContain('and 45 more');
   });

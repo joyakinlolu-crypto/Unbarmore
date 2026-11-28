@@ -171,7 +171,7 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
   }, 'A5');
 }
 
-// ───────────── Quote / invoice (A5) ─────────────
+// ───────────── Invoice (A5): what Nigerian shops call a quotation ─────────────
 
 export interface QuoteInput {
   businessName: string; rcNumber: string | null; logo?: Buffer | null;
@@ -188,14 +188,14 @@ export interface QuoteInput {
 
 export function quotePdf(q: QuoteInput): Promise<Buffer> {
   return render((doc) => {
-    header(doc, `QUOTATION\n${q.quoteLabel}`, q.businessName, q.rcNumber, q.logo);
+    header(doc, `INVOICE\n${q.quoteLabel}`, q.businessName, q.rcNumber, q.logo);
     const x = doc.page.margins.left;
     const w = doc.page.width - x - doc.page.margins.right;
 
     doc.font('reg').fontSize(9).fillColor(BRAND.muted);
     doc.text(`Date: ${q.dateWat}`);
-    doc.text(`Prepared for: ${q.customerName ?? 'Valued customer'}`);
-    if (q.validUntilLabel) { doc.font('bold').fillColor(BRAND.red).text(`Price valid until: ${q.validUntilLabel}`); }
+    doc.text(`Billed to: ${q.customerName ?? 'Valued customer'}`);
+    if (q.validUntilLabel) { doc.font('bold').fillColor(BRAND.red).text(`Valid until: ${q.validUntilLabel}`); }
     doc.moveDown();
 
     const cols = [x, x + w * 0.5, x + w * 0.62, x + w * 0.8];

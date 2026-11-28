@@ -105,7 +105,7 @@ export function scorecardText(sc: { rows: ShopRow[]; cohort: Cohort }, days: num
     const seen = r.hoursSinceSeen === null ? 'never seen' : r.hoursSinceSeen < 24 ? `seen ${r.hoursSinceSeen}h ago` : `seen ${Math.floor(r.hoursSinceSeen / 24)}d ago`;
     const bits = [`${r.active}/${days} days`, `${r.entries} entries`];
     if (r.debtCollectedNgn > 0) bits.push(`collected ${ngn(r.debtCollectedNgn)}`);
-    const extras = [r.receipts ? `${r.receipts} receipts` : '', r.videos ? `${r.videos} videos` : '', r.quotes ? `${r.quotes} quotes` : '', r.counts ? `${r.counts} counts` : ''].filter(Boolean).join(', ');
+    const extras = [r.receipts ? `${r.receipts} receipts` : '', r.videos ? `${r.videos} videos` : '', r.quotes ? `${r.quotes} invoices` : '', r.counts ? `${r.counts} counts` : ''].filter(Boolean).join(', ');
     lines.push(`${ICON[r.status]} *${r.name}* (${LABEL[r.status]}): ${bits.join(', ')}${extras ? `, ${extras}` : ''}. ${r.costPricesSet ? '' : 'No cost prices. '}${seen}.`);
   }
   if (sc.rows.length > MAX) lines.push(`…and ${sc.rows.length - MAX} more.`);

@@ -99,7 +99,7 @@ beforeEach(() => { m.quotes.length = 0; m.uploaded.length = 0; m.batches.length 
 describe('quote rules (pure)', () => {
   it('totals include delivery; numbers are Q-001 style', () => {
     expect(quoteTotal([{ item: 'Lace', qty: 2, unit: 50_000 }, { item: 'Gele', qty: 1, unit: 5_000 }], 2_000)).toBe(107_000);
-    expect(quoteLabel(7)).toBe('Q-007'); expect(quoteLabel(1234)).toBe('Q-1234');
+    expect(quoteLabel(7)).toBe('INV-007'); expect(quoteLabel(1234)).toBe('INV-1234');
   });
   it('validity: counted from today; extending an expired quote starts from TODAY, a live one adds to its end date', () => {
     expect(validUntil('2026-11-27', 3)).toBe('2026-11-30');
@@ -114,11 +114,11 @@ describe('quote rules (pure)', () => {
     expect(expiryPhrase(null)).toBe('no expiry');
   });
   it.each([
-    ['Q-014 PAID', { no: 14, action: 'paid', method: null }], ['q14 paid cash', { no: 14, action: 'paid', method: 'cash' }], ['Quote 14 paid transfer', { no: 14, action: 'paid', method: 'transfer' }],
+    ['INV-014 PAID', { no: 14, action: 'paid', method: null }], ['Q-014 PAID', { no: 14, action: 'paid', method: null }], ['invoice 14 paid cash', { no: 14, action: 'paid', method: 'cash' }], ['inv14 extend 7', { no: 14, action: 'extend', days: 7 }], ['q14 paid cash', { no: 14, action: 'paid', method: 'cash' }], ['Quote 14 paid transfer', { no: 14, action: 'paid', method: 'transfer' }],
     ['Q-014 extend 7', { no: 14, action: 'extend', days: 7 }], ['q-14 EXTEND', { no: 14, action: 'extend', days: 3 }], ['Q-014 cancel', { no: 14, action: 'cancel' }],
   ])('"%s" is a quote command', (t, want) => { expect(parseQuoteCommand(t)).toEqual(want); });
   it('lookalikes are not quote commands', () => {
-    for (const no of ['Q-014', 'paid Q-014', 'Q-014 PAID maybe', 'quote for Ada 2 lace', 'quotes', 'Q-014 extend soon', 'Q-014 cancel it']) expect(parseQuoteCommand(no)).toBeNull();
+    for (const no of ['INV-014', 'invoice for Ada 2 lace', 'invoices', 'Q-014', 'paid Q-014', 'Q-014 PAID maybe', 'quote for Ada 2 lace', 'quotes', 'Q-014 extend soon', 'Q-014 cancel it']) expect(parseQuoteCommand(no)).toBeNull();
   });
   it('MY ACCOUNT parsing', () => {
     expect(parsePayDetailsCommand('MY ACCOUNT GTBank 0123456789 Ada Fabrics')).toEqual({ text: 'GTBank 0123456789 Ada Fabrics' });
@@ -131,19 +131,19 @@ describe('creating a quote', () => {
   it('Starter: PDF built and stored, ONE message with the document + Mark paid / Extend / Cancel; held for 3 days', async () => {
     const r = await createQuote(actor('starter_5k'), req);
     const p = doc(r);
-    expect(p.interactive.header.type).toBe('document'); expect(p.interactive.header.document.filename).toBe('Quote-Q-001.pdf');
+    expect(p.interactive.header.type).toBe('document'); expect(p.interactive.header.document.filename).toBe('Invoice-INV-001.pdf');
     expect(buttons(r)).toEqual(['QPAID:q-1', 'QEXT:q-1', 'QCAN:q-1']);
     const t = body(r);
-    expect(t).toContain('Q-001'); expect(t).toContain('Mama Tunde'); expect(t).toContain('₦107,000'); expect(t).toContain('Price held until'); expect(t).toContain('MY ACCOUNT');
+    expect(t).toContain('INV-001'); expect(t).toContain('Mama Tunde'); expect(t).toContain('₦107,000'); expect(t).toContain('Valid until'); expect(t).toContain('MY ACCOUNT');
     expect(m.quotes[0]).toMatchObject({ quote_no: 1, customer_name: 'Mama Tunde', total_ngn: 107_000, delivery_fee_ngn: 2_000, status: 'open' });
     expect(m.quotes[0]!.valid_until).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(m.uploaded[0]!.path).toBe('b1/quotes/Q-001.pdf'); expect(m.uploaded[0]!.size).toBeGreaterThan(1500);
+    expect(m.uploaded[0]!.path).toBe('b1/quotes/INV-001.pdf'); expect(m.uploaded[0]!.size).toBeGreaterThan(1500);
   });
   it('Free plan: a branded quote with NO expiry, no Extend button, and a nudge towards Starter', async () => {
     const r = await createQuote(actor('free_limited'), req);
     expect(m.quotes[0]!.valid_until).toBeNull();
     expect(buttons(r)).toEqual(['QPAID:q-1', 'QCAN:q-1']);
-    expect(body(r)).toContain('Starter adds a price-validity window'); expect(body(r)).not.toContain('Price held until');
+    expect(body(r)).toContain('Starter adds a validity period'); expect(body(r)).not.toContain('Valid until');
   });
   it('the owner\'s own validity (valid 7 days) is honoured on paid plans', async () => {
     await createQuote(actor('starter_5k'), { ...req, valid_days: 7 });
@@ -181,7 +181,7 @@ describe('marking a quote paid records the sale exactly once', () => {
     ]);
     expect(m.batches[0]![2].item_name).toBeNull();                                   // delivery is not a product
     expect(m.confirmed).toEqual(['batch-1']); expect(m.quotes[0]).toMatchObject({ status: 'paid', paid_method: 'cash' });
-    expect(body(r)).toContain('Saved'); expect(body(r)).toContain('Q-001 marked paid (cash)');
+    expect(body(r)).toContain('Saved'); expect(body(r)).toContain('INV-001 marked paid (cash)');
   });
   it('saying PAID twice never records the sale twice', async () => {
     await createQuote(actor(), req);
@@ -211,7 +211,7 @@ describe('extend, cancel, list', () => {
     await createQuote(actor(), req);
     const before = m.quotes[0]!.valid_until as string;
     const r = await quoteExtend(actor(), { no: 1 }, 5);
-    expect(m.quotes[0]!.valid_until > before).toBe(true); expect(doc(r).interactive.header.document.filename).toBe('Quote-Q-001.pdf'); expect(body(r)).toContain('extended to');
+    expect(m.quotes[0]!.valid_until > before).toBe(true); expect(doc(r).interactive.header.document.filename).toBe('Invoice-INV-001.pdf'); expect(body(r)).toContain('extended to');
     expect(m.uploaded).toHaveLength(2);
     expect(body(await quoteExtend(actor('free_limited'), { no: 1 }, 5))).toContain('no expiry');
   });
@@ -222,9 +222,9 @@ describe('extend, cancel, list', () => {
   it('QUOTES lists open ones with the total waiting and how long each has left', async () => {
     await createQuote(actor(), req); await createQuote(actor(), { ...req, customer_name: 'Ada' });
     const t = body(await quotesListReply(actor()));
-    expect(t).toContain('₦214,000 waiting'); expect(t).toContain('Q-001'); expect(t).toContain('Q-002'); expect(t).toContain('days left');
+    expect(t).toContain('Open invoices'); expect(t).toContain('₦214,000 waiting'); expect(t).toContain('INV-001'); expect(t).toContain('INV-002'); expect(t).toContain('days left');
     await quoteCancel(actor(), { no: 1 });
-    expect(body(await quotesListReply(actor()))).not.toContain('Q-001');
+    expect(body(await quotesListReply(actor()))).not.toContain('INV-001');
   });
   it('MY ACCOUNT: strict (needs a bank and a 10-digit number), owner only, saved on the business', async () => {
     expect(body(await payDetailsReply(actor(), { text: 'my number is 0803' }))).toContain('10-digit');
@@ -238,14 +238,14 @@ describe('7 AM note: expiring quotes', () => {
   const base = { businessName: 'Ada', yesterday: null, debts: [], quiet: [], lowStock: [], isMonday: false };
   it('quotes expiring tomorrow / today / expired yesterday are named, with the command to act', async () => {
     const t = composeMorning({ ...base, quotes: [{ label: 'Q-014', customer: 'Mama Tunde', total: 105_000, left: 1 }, { label: 'Q-012', customer: null, total: 20_000, left: -1 }] }).lines.join('\n');
-    expect(t).toContain('Quote Q-014 (Mama Tunde, ₦105,000) expires tomorrow'); expect(t).toContain('Quote Q-012 (₦20,000) expired yesterday');
+    expect(t).toContain('Invoice Q-014 (Mama Tunde, ₦105,000) expires tomorrow'); expect(t).toContain('Invoice Q-012 (₦20,000) expired yesterday');
     expect(t).toContain('Ask Mama Tunde to pay Q-014 before it expires tomorrow'); expect(t).toContain('Q-014 EXTEND 3');
     expect(composeMorning({ ...base, quotes: [{ label: 'Q-012', customer: 'Ada', total: 1, left: -1 }] }).lines.join('\n')).toContain('Q-012 PAID');
   });
   it('an overdue debt still comes first; no quotes → no quote lines', () => {
     const t = composeMorning({ ...base, debts: [{ name: 'Kalu', amount: 28_000, late: 3, age: 20 }], quotes: [{ label: 'Q-014', customer: 'X', total: 1, left: 0 }] }).lines.join('\n');
     expect(t).toContain('Start with Kalu');
-    expect(composeMorning(base).lines.join('\n')).not.toContain('Quote');
+    expect(composeMorning(base).lines.join('\n')).not.toContain('Invoice');
   });
   it('quotesDue only returns open quotes within a day either side of today', async () => {
     m.quotes.push(
@@ -255,7 +255,7 @@ describe('7 AM note: expiring quotes', () => {
     );
     m.quotes.forEach((q) => { q.business_id = 'b1'; });
     const due = await quotesDue('b1', '2026-12-01');
-    expect(due.map((d) => [d.label, d.left]).sort()).toEqual([['Q-001', 1], ['Q-002', 0], ['Q-003', -1]]);
+    expect(due.map((d) => [d.label, d.left]).sort()).toEqual([['INV-001', 1], ['INV-002', 0], ['INV-003', -1]]);
   });
 });
 
@@ -323,9 +323,9 @@ describe('quote PDF', () => {
       fs.writeFileSync('/tmp/q-test.pdf', pdf); return execFileSync('pdftotext', ['/tmp/q-test.pdf', '-'], { encoding: 'utf8' });
     };
     const paid = await mk({ validUntilLabel: 'Mon 30 Nov', payDetails: 'GTBank 0123456789 Ada Fabrics', promo: { botNumber: '2348000000000', referralCode: 'UNBAR-ABCD', businessName: 'Ada Fabrics' } });
-    for (const s of ['QUOTATION', 'Q-014', 'Mama Tunde', 'Price valid until: Mon 30 Nov', 'PAY TO', 'GTBank 0123456789 Ada Fabrics', '₦102,000', 'Delivery', 'referred by Ada Fabrics']) expect(paid).toContain(s);
+    for (const s of ['INVOICE', 'Billed to: Mama Tunde', 'Valid until: Mon 30 Nov', 'PAY TO', 'GTBank 0123456789 Ada Fabrics', '₦102,000', 'Delivery', 'referred by Ada Fabrics']) expect(paid).toContain(s);
     const free = await mk({});
-    expect(free).not.toContain('valid until'); expect(free).not.toContain('PAY TO');
+    expect(free).not.toContain('Valid until'); expect(free).not.toContain('PAY TO');
   });
 });
 

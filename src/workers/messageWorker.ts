@@ -145,7 +145,7 @@ async function handle(msg: WaInboundMessage, profileName: string | null): Promis
       const keep = waiting ?? '-';
       try { await saveLogo(actor, (await downloadMedia(photoId)).data); }
       catch { await redis.set(AWAIT_LOGO_KEY(phone), keep, 'EX', AWAIT_LOGO_TTL_S); return reply(phone).text('I couldn\'t read that picture. Please send your logo again as a normal photo (or as a file).'); }
-      return keep !== '-' ? customerReceiptReply(actor, keep) : reply(phone).text('✅ *Your logo is saved.* It now appears at the top of your receipts, quotes and statements.', 'Wrong picture? Send *LOGO* and try again.');
+      return keep !== '-' ? customerReceiptReply(actor, keep) : reply(phone).text('✅ *Your logo is saved.* It now appears at the top of your receipts, invoices and statements.', 'Wrong picture? Send *LOGO* and try again.');
     }
   }
 
@@ -461,7 +461,7 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
     if (qcmd.action === 'extend') return quoteExtend(actor, { no: qcmd.no }, qcmd.days);
     return quoteCancel(actor, { no: qcmd.no });
   }
-  if (['QUOTES', 'MY QUOTES', 'OPEN QUOTES', 'INVOICES'].includes(upper)) return quotesListReply(actor);
+  if (['INVOICES', 'MY INVOICES', 'OPEN INVOICES', 'INVOICE', 'QUOTES', 'MY QUOTES', 'OPEN QUOTES'].includes(upper)) return quotesListReply(actor);
   const payCmd = parsePayDetailsCommand(t);
   if (payCmd) return payDetailsReply(actor, payCmd);
   if (['FLYER', 'MAKE FLYER', 'FLYERS'].includes(upper)) return reply(actor.phone).text(...FLYER_HELP);
@@ -565,7 +565,7 @@ function helpMenu(actor: Actor): Reply {
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
-    '📄 Say "quote for Mama Tunde, 2 lace 50k each" for a branded quote · QUOTES · Q-014 PAID · MY ACCOUNT (bank details on quotes)',
+    '📄 Say "invoice for Mama Tunde, 2 lace 50k each" for a branded invoice · INVOICES · INV-014 PAID · MY ACCOUNT (bank details on invoices)',
     '🖼️ FLYER — free "Available now" picture for your Status · MAKE LOGO — a free logo',
     '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 SUPPORT',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
@@ -614,7 +614,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       const batch = b2 && b2 !== '-' ? b2 : null;
       if (a === 'ask') { await redis.set(AWAIT_LOGO_KEY(actor.phone), batch ?? '-', 'EX', AWAIT_LOGO_TTL_S); return logoAskReply(actor.phone); }
       if (a === 'make') return logoColourPicker(actor.phone, batch);
-      if (a === 'keep') return reply(actor.phone).text('👍 Done. This logo stays on your receipts and quotes. You can change it any time: send a photo with the word *logo*.');
+      if (a === 'keep') return reply(actor.phone).text('👍 Done. This logo stays on your receipts and invoices. You can change it any time: send a photo with the word *logo*.');
       await useNameAsLogo(actor);
       return batch ? customerReceiptReply(actor, batch) : reply(actor.phone).text('✅ Done. Your business name is your logo on receipts.');
     }
@@ -719,9 +719,9 @@ async function runBrain(
       if (!input.image) return reply(actor.phone).text('Send your logo as a photo with the word *logo* as the caption.');
       if (actor.isStaff) return reply(actor.phone).text('Only the owner can change the logo.');
       try { await saveLogo(actor, input.image.data); } catch { return reply(actor.phone).text('I couldn\'t read that picture. Please send your logo again as a normal photo.'); }
-      return reply(actor.phone).text('✅ *That looks like your logo, so I saved it.* It now appears on your receipts, quotes and statements.', 'It was a product photo? Say *LOGO REMOVE*, then send the photo again with a caption like _Ankara gown 15k_.');
+      return reply(actor.phone).text('✅ *That looks like your logo, so I saved it.* It now appears on your receipts, invoices and statements.', 'It was a product photo? Say *LOGO REMOVE*, then send the photo again with a caption like _Ankara gown 15k_.');
     }
-    case 'CREATE_QUOTE': return brain.quote ? createQuote(actor, brain.quote) : reply(actor.phone).text('Tell me the customer, the items and prices, like: _quote for Mama Tunde: 2 lace 50k each and 1 gele 5k, valid 3 days_');
+    case 'CREATE_QUOTE': return brain.quote ? createQuote(actor, brain.quote) : reply(actor.phone).text('Tell me the customer, the items and prices, like: _invoice for Mama Tunde: 2 lace 50k each and 1 gele 5k, valid 3 days_');
     case 'RECORD_DEBTS': return proposeDebts(actor, redis, brain.debts);
     case 'SET_PRODUCTS': return proposeProducts(actor, redis, brain.products);
     case 'UPDATE_CUSTOMER': return saveCustomerPhone(actor, brain.customer_update?.name ?? '', brain.customer_update?.phone ?? '');

@@ -76,14 +76,14 @@ export function logoColourPicker(phone: string, batchId: string | null): Reply {
   return r;
 }
 
-/** Draws an initials logo, saves it as the owner's logo (receipts + quotes), and sends it back so it can become the WhatsApp profile picture. */
+/** Draws an initials logo, saves it as the owner's logo (receipts + invoices), and sends it back so it can become the WhatsApp profile picture. */
 export async function makeLogoReply(actor: Actor, paletteIdx: number): Promise<Reply> {
   const png = await renderLogo(initials(actor.business.name), paletteIdx);
   await saveLogo(actor, png, { generated: true });
   const path = actor.business.logo_url!;
   return reply(actor.phone)
     .image(await signedUrl('cleaned-images', path))
-    .text('✅ *Your logo is ready* and it now appears on your receipts and quotes.', 'Tip: save this picture and set it as your WhatsApp business profile photo.', '*Have your own logo?* Tap below, or send the photo with the word *logo* as its caption, any time.')
+    .text('✅ *Your logo is ready* and it now appears on your receipts and invoices.', 'Tip: save this picture and set it as your WhatsApp business profile photo.', '*Have your own logo?* Tap below, or send the photo with the word *logo* as its caption, any time.')
     .button('LOGO:ask:-', '📷 Use my own logo')
     .button('LOGO:keep:-', '👍 Keep this one');
 }
