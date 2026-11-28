@@ -4,7 +4,7 @@ import { addVideoCredits, db, isInServiceWindow } from '../db/supabase.js';
 import { ngn } from '../lib/money.js';
 import { scorecardReply } from './scorecard.js';
 import { signedUrl, uploadFile } from '../db/supabase.js';
-import { synthesizeVoiceover } from '../services/ttsService.js';
+import { cloudVoiceStatus, synthesizeVoiceover } from '../services/ttsService.js';
 
 const wat = (t: number) => new Date(t + 3600_000).toISOString().slice(5, 16).replace('T', ' ');
 
@@ -104,12 +104,13 @@ const VOICE_LINES: Record<string, string> = {
 export async function testVoiceReply(phone: string, lang: string): Promise<Reply> {
   const t0 = Date.now();
   try {
+    const cloud = await cloudVoiceStatus(lang === 'yoruba');   // asked every time, so the reason Cloud is not being used is never a mystery
     const v = await synthesizeVoiceover(VOICE_LINES[lang] ?? VOICE_LINES.english!, { pidgin: lang === 'pidgin', yoruba: lang === 'yoruba' });
     const path = await uploadFile('videos', `admin-tests/voice-${Date.now()}.${v.ext}`, v.data, v.mime);
     const who = { cloud: 'Google Cloud Text-to-Speech', gemini: 'Gemini API speech (the capped one)', azure: 'Azure', google: 'Google TTS' }[v.provider ?? 'gemini'];
     return reply(phone).document(await signedUrl('videos', path), `voice-test-${lang}.${v.ext}`)
-      .text(`🔊 *Voice test (${lang}) worked* via *${who}* in ${((Date.now() - t0) / 1000).toFixed(1)}s.`, 'Open the file and listen: does it sound right?');
+      .text(`🔊 *Voice test (${lang}) worked* via *${who}* in ${((Date.now() - t0) / 1000).toFixed(1)}s.`, `☁️ *Google Cloud voice:* ${cloud}`, 'Open the file and listen: does it sound right?');
   } catch (e) {
-    return reply(phone).text(`🔇 *Voice test (${lang}) FAILED* after ${((Date.now() - t0) / 1000).toFixed(1)}s:`, String((e as Error)?.message ?? e).replace(/\s+/g, ' ').slice(0, 300), '', 'Videos made now will have music only. Check GOOGLE_TTS_CREDENTIALS_JSON / AZURE_SPEECH_KEY.');
+    return reply(phone).text(`☁️ *Google Cloud voice:* ${await cloudVoiceStatus(lang === 'yoruba').catch(() => 'unknown')}`, `🔇 *Voice test (${lang}) FAILED* after ${((Date.now() - t0) / 1000).toFixed(1)}s:`, String((e as Error)?.message ?? e).replace(/\s+/g, ' ').slice(0, 300), '', 'Videos made now will have music only. Check GOOGLE_TTS_CREDENTIALS_JSON / AZURE_SPEECH_KEY.');
   }
 }

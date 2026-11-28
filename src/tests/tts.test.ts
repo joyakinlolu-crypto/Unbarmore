@@ -169,4 +169,16 @@ describe('Google Cloud Text-to-Speech (the path around the Gemini API\'s 10-a-da
     await mod.synthesizeVoiceover('Hello'); expect(synth).not.toHaveBeenCalled(); expect(g).toHaveBeenCalled();
     delete process.env.GOOGLE_TTS_CREDENTIALS_JSON;
   });
+  it('cloudVoiceStatus says NOT SET / UNREADABLE / WORKING / REJECTED, never leaking the key', async () => {
+    let { mod } = await setup(undefined);
+    expect(await mod.cloudVoiceStatus()).toMatch(/^NOT SET/);
+    ({ mod } = await setup('{"hello": "world"}'));
+    const bad = await mod.cloudVoiceStatus(); expect(bad).toMatch(/^UNREADABLE/); expect(bad).toContain('18 characters'); expect(bad).toContain('starts with {');
+    ({ mod } = await setup(JSON.stringify(sa)));
+    synth.mockResolvedValue([{ audioContent: Buffer.from('ID3') }]);
+    const ok = await mod.cloudVoiceStatus(); expect(ok).toMatch(/^WORKING/); expect(ok).not.toContain('PRIVATE KEY'); expect(ok).not.toContain(sa.client_email);
+    synth.mockRejectedValue(new Error(`7 PERMISSION_DENIED: Cloud Text-to-Speech API has not been used in project 1 before or it is disabled. ${sa.private_key}`));
+    const rej = await mod.cloudVoiceStatus(); expect(rej).toMatch(/^REJECTED by Google: 7 PERMISSION_DENIED/); expect(rej).not.toContain('ABC');
+    delete process.env.GOOGLE_TTS_CREDENTIALS_JSON;
+  });
 });

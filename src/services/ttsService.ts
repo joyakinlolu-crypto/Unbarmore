@@ -23,6 +23,16 @@ export function parseCloudCredentials(raw: string | undefined): { client_email: 
   } catch { return null; }
 }
 
+/** Plain-words status of the Cloud TTS setup, for the admin TEST VOICE command. Never throws, never reveals the credential. */
+export async function cloudVoiceStatus(yoruba = false): Promise<string> {
+  const raw = env.GOOGLE_TTS_CREDENTIALS_JSON;
+  if (!raw?.trim()) return 'NOT SET: this server has no GOOGLE_TTS_CREDENTIALS_JSON. Check the variable name is exactly that, it is on the Unbarmore service, and Railway finished redeploying.';
+  const creds = parseCloudCredentials(raw);
+  if (!creds) return `UNREADABLE: the variable is set (${raw.trim().length} characters, ${raw.trim().startsWith('{') ? 'starts with {' : 'does not start with {'}) but it is not a service-account key. It must be the key file's JSON, or the base64 of that file, containing "client_email" and "private_key".`;
+  try { await cloudTts('Test.', yoruba); return `WORKING (service account ${creds.client_email.replace(/^(.{3}).*(@.*)$/, '$1…$2')}).`; }
+  catch (e) { return `REJECTED by Google: ${String((e as Error)?.message ?? e).replace(/-----BEGIN[\s\S]*?END[^-]*-----/g, '[key]').replace(/\s+/g, ' ').slice(0, 320)}`; }
+}
+
 /** Google Cloud Text-to-Speech: the Gemini voice model through Cloud (or a named voice). Throws on any failure so the caller can fall back. */
 async function cloudTts(text: string, yoruba: boolean): Promise<Voiceover> {
   const creds = parseCloudCredentials(env.GOOGLE_TTS_CREDENTIALS_JSON);

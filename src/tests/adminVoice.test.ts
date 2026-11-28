@@ -6,8 +6,8 @@ vi.hoisted(() => {
     WHATSAPP_DISPLAY_NUMBER: '2348000000000', WHATSAPP_APP_SECRET: 's', WHATSAPP_VERIFY_TOKEN: 'verify-token-123', GEMINI_API_KEY: 'x',
   });
 });
-const m = vi.hoisted(() => ({ synth: vi.fn(), upload: vi.fn() }));
-vi.mock('../services/ttsService.js', () => ({ synthesizeVoiceover: m.synth }));
+const m = vi.hoisted(() => ({ synth: vi.fn(), upload: vi.fn(), cloud: { current: 'WORKING (service account tts…@p.iam).' } }));
+vi.mock('../services/ttsService.js', () => ({ synthesizeVoiceover: m.synth, cloudVoiceStatus: async () => m.cloud.current }));
 vi.mock('../db/supabase.js', () => ({
   db: {}, addVideoCredits: vi.fn(), isInServiceWindow: vi.fn(),
   uploadFile: (...a: unknown[]) => m.upload(...a), signedUrl: async (_b: string, p: string) => `https://files.test/${p}`,
@@ -23,6 +23,7 @@ describe('admin TEST VOICE', () => {
   it('says which service answered, how long it took, and sends the audio file so it can be listened to', async () => {
     m.synth.mockResolvedValue({ data: Buffer.from('x'), ext: 'mp3', mime: 'audio/mpeg', provider: 'cloud' });
     const p = await payload('TEST VOICE');
+    expect(p.document.caption).toContain('Google Cloud voice:* WORKING');
     expect(p.document.filename).toBe('voice-test-english.mp3'); expect(p.document.caption).toContain('Google Cloud Text-to-Speech'); expect(p.document.caption).toContain('worked');
     expect(m.upload.mock.calls[0]![0]).toBe('videos'); expect(m.upload.mock.calls[0]![1]).toMatch(/^admin-tests\/voice-\d+\.mp3$/);
   });
@@ -35,6 +36,13 @@ describe('admin TEST VOICE', () => {
     m.synth.mockRejectedValue(new Error('429 Free Tier per day'));
     const t = (await payload('TEST VOICE')).text.body as string;
     expect(t).toContain('FAILED'); expect(t).toContain('429'); expect(t).toContain('music only'); expect(t).toContain('GOOGLE_TTS_CREDENTIALS_JSON');
+  });
+  it('when Cloud is not being used, the message says exactly why (so nobody has to guess)', async () => {
+    m.synth.mockResolvedValue({ data: Buffer.from('x'), ext: 'wav', mime: 'audio/wav', provider: 'gemini' });
+    m.cloud.current = 'REJECTED by Google: 403 Cloud Text-to-Speech API has not been used in project 123 before or it is disabled.';
+    expect((await payload('TEST VOICE')).document.caption).toContain('REJECTED by Google: 403 Cloud Text-to-Speech API has not been used');
+    m.cloud.current = 'NOT SET: this server has no GOOGLE_TTS_CREDENTIALS_JSON.';
+    expect((await payload('TEST VOICE')).document.caption).toContain('NOT SET');
   });
   it('only exact commands match', async () => {
     expect(await adminAlertCommand('2348100000001', 'test voices please')).toBeNull();
