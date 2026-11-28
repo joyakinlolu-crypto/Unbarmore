@@ -1,3 +1,5 @@
+import { calendarReply } from '../flows/calendar.js';
+import { parseCalendarCommand } from '../lib/calendar.js';
 import { recordVideoResult } from '../flows/videoResults.js';
 import { DelayedError, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
@@ -486,6 +488,8 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (addrCmd) return addressReply(actor, addrCmd);
   const payCmd = parsePayDetailsCommand(t);
   if (payCmd) return payDetailsReply(actor, payCmd);
+  const calCmd = parseCalendarCommand(upper);
+  if (calCmd) return calendarReply(actor, calCmd);
   if (['FLYER', 'MAKE FLYER', 'FLYERS'].includes(upper)) return reply(actor.phone).text(...FLYER_HELP);
   if (['MAKE LOGO', 'MAKE ME A LOGO', 'LOGO MAKER', 'NEW LOGO'].includes(upper) && !actor.isStaff) return logoColourPicker(actor.phone, null);
   const counted = parseCount(t);
@@ -601,7 +605,7 @@ function plansMenu(actor: Actor): Reply {
       '*Unbarmore plans*',
       `⭐ Starter — ${ngn(PRICES_NGN.starter_5k.monthly)}/mo or ${ngn(PRICES_NGN.starter_5k.annual)}/yr (2 months free)`,
       '🎙️ *Speak a full day\'s sales & expenses in one voice note* — I split it into every sale, expense and debt. One voice note = 1 of your 250 messages.',
-      `${PLANS.starter_5k.videos_used_this_month} HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor`,
+      `${PLANS.starter_5k.videos_used_this_month} HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor · monthly marketing calendar for Nigeria`,
       '',
       foundingPrice(b) ? `🚀 Growth — *${ngn(foundingPrice(b)!)}/mo, your founding-shop price, locked until ${new Date(b.founding_until!).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}* (normally ${ngn(PRICES_NGN.growth_15k.monthly)})` : `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
       '30 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',

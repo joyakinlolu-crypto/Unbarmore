@@ -17,6 +17,8 @@ export interface PlanCaps {
   inflationShield: boolean;
   /** Quotes get a validity window ("price held for 3 days") + expiry nudges. Free plans still get a branded quote, with no expiry. */
   quoteExpiry: boolean;
+  /** The month-by-month Nigerian marketing calendar (CALENDAR command and the 1st-of-month note). */
+  marketingCalendar: boolean;
   outboundCeoTemplate: boolean;
   maxStaff: number;
   sheetsSync: boolean;
@@ -25,22 +27,22 @@ export interface PlanCaps {
 export const PLANS: Record<Tier, PlanCaps> = {
   trial: {
     videos_used_this_month: 3, tx_logged_this_month: 20, ocr_scans_used_this_month: 10, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: 1,
-    voiceNotes: true, watermark: 'full', videoLength: 'mini', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true,
+    voiceNotes: true, watermark: 'full', videoLength: 'mini', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true, marketingCalendar: true,
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
   free_limited: {
     videos_used_this_month: 1, tx_logged_this_month: 20, ocr_scans_used_this_month: 0, pdf_receipts_used_this_month: 3, ceo_reports_used_this_month: 0,
-    voiceNotes: false, watermark: 'full', videoLength: 'mini', themes: false, dailyCheckin: true, inflationShield: false, quoteExpiry: false,
+    voiceNotes: false, watermark: 'full', videoLength: 'mini', themes: false, dailyCheckin: true, inflationShield: false, quoteExpiry: false, marketingCalendar: false,
     outboundCeoTemplate: false, maxStaff: 0, sheetsSync: false,
   },
   starter_5k: {
     videos_used_this_month: 8, tx_logged_this_month: 250, ocr_scans_used_this_month: 150, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
-    voiceNotes: true, watermark: 'subtle', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true,
+    voiceNotes: true, watermark: 'subtle', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true, marketingCalendar: true,
     outboundCeoTemplate: true, maxStaff: 0, sheetsSync: false,
   },
   growth_15k: {
     videos_used_this_month: 30, tx_logged_this_month: -1, ocr_scans_used_this_month: 500, pdf_receipts_used_this_month: -1, ceo_reports_used_this_month: -1,
-    voiceNotes: true, watermark: 'none', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true,
+    voiceNotes: true, watermark: 'none', videoLength: 'full', themes: true, dailyCheckin: true, inflationShield: true, quoteExpiry: true, marketingCalendar: true,
     outboundCeoTemplate: true, maxStaff: 10, sheetsSync: true,
   },
 };

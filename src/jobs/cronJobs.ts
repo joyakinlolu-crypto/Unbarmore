@@ -1,3 +1,4 @@
+import { firstOfMonthLine } from '../flows/calendar.js';
 import { claimDueFollowup } from '../flows/videoResults.js';
 import { Worker } from 'bullmq';
 import { env } from '../config/env.js';
@@ -86,7 +87,8 @@ async function dailyMorning(): Promise<void> {
       if (!(await claimOutbound(biz.id, 'daily_morning', day))) continue;
 
       const msg = composeMorning(await gatherMorning(biz));
-      const r = reply(biz.owner_phone).text(...msg.lines);
+      const monthLine = firstOfMonthLine(biz.subscription_tier);
+      const r = reply(biz.owner_phone).text(...msg.lines, ...(monthLine ? ['', monthLine] : []));
       for (const btn of msg.buttons) r.button(btn.id, btn.title);
       await r.send().catch(() => undefined);
       // Once per video, 3–10 days after it was made: did it bring a customer? Inside the free window, only after the main note.
