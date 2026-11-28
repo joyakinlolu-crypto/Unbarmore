@@ -37,7 +37,7 @@ export function splitItem(description: string): { name: string; detail: string |
 }
 
 /** Brand block: the owner's logo, or (no logo) a green monogram badge. Always followed by the business name. */
-function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rcNumber: string | null, logo?: Buffer | null) {
+function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rcNumber: string | null, logo?: Buffer | null, contact?: string | null) {
   const w = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const x = doc.page.margins.left;
   const y0 = doc.page.margins.top;
@@ -59,8 +59,9 @@ function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rc
   while (shown.length > 3 && doc.fontSize(size).widthOfString(shown) > maxW) shown = shown.slice(0, -2).trimEnd() + '…';
   doc.fontSize(size).fillColor(BRAND.ink).text(shown, tx, y0 + (rcNumber ? 4 : 11), { lineBreak: false });
   if (rcNumber) doc.font('reg').fontSize(8).fillColor(BRAND.muted).text(`RC ${rcNumber}`, tx, y0 + 24, { width: w * 0.5, lineBreak: false });
+  if (contact) doc.font('reg').fontSize(7.5).fillColor(BRAND.muted).text(contact.slice(0, 90), tx, y0 + (rcNumber ? 34 : 28), { width: w * 0.66, lineBreak: false });
   doc.font('bold').fontSize(11).fillColor(BRAND.green).text(title, x, y0, { width: w, align: 'right' });
-  doc.y = y0 + S + 12;
+  doc.y = y0 + S + (contact ? 18 : 12);
   doc.moveTo(x, doc.y).lineTo(x + w, doc.y).strokeColor(BRAND.line).stroke();
   doc.x = x;
   doc.moveDown(0.8);
@@ -91,6 +92,10 @@ export interface ReceiptInput {
   receiptNumber: string;
   dateWat: string;
   customerName: string | null;
+  /** The customer's phone, printed beside their name. */
+  customerPhone?: string | null;
+  /** "Tel 0803 123 4567 · 12 Bode Street, Ibadan": the business issuing the receipt. */
+  businessContact?: string | null;
   lines: { description: string; quantity: number; unitPrice: number | null; amount: number }[];
   amountPaid: number;
   paymentMethod: string;
@@ -107,13 +112,13 @@ export interface ReceiptInput {
 
 export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
   return render((doc) => {
-    header(doc, `RECEIPT\n#${r.receiptNumber}`, r.businessName, r.rcNumber, r.logo);
+    header(doc, `RECEIPT\n#${r.receiptNumber}`, r.businessName, r.rcNumber, r.logo, r.businessContact);
     const x = doc.page.margins.left;
     const w = doc.page.width - x - doc.page.margins.right;
 
     doc.font('reg').fontSize(9).fillColor(BRAND.muted);
     doc.text(`Date: ${r.dateWat}`);
-    doc.text(`Customer: ${r.customerName ?? 'Walk-in customer'}`);
+    doc.text(`Issued to: ${[r.customerName ?? 'Walk-in customer', r.customerPhone].filter(Boolean).join(' · ')}`);
     if (r.staffName) doc.text(`Served by: ${r.staffName}`);
     doc.moveDown();
 
@@ -175,7 +180,9 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
 
 export interface QuoteInput {
   businessName: string; rcNumber: string | null; logo?: Buffer | null;
-  quoteLabel: string; dateWat: string; customerName: string | null;
+  quoteLabel: string; dateWat: string; customerName: string | null; customerPhone?: string | null; businessContact?: string | null;
+  /** Payment plan lines, e.g. "Deposit: ₦53,500 on issue". */
+  planLines?: string[];
   lines: { item: string; detail?: string | null; qty: number; unit: number; amount: number }[];
   deliveryFee: number; total: number;
   /** "Thu 4 Dec". Omitted on plans without a validity window. */
@@ -188,13 +195,13 @@ export interface QuoteInput {
 
 export function quotePdf(q: QuoteInput): Promise<Buffer> {
   return render((doc) => {
-    header(doc, `INVOICE\n${q.quoteLabel}`, q.businessName, q.rcNumber, q.logo);
+    header(doc, `INVOICE\n${q.quoteLabel}`, q.businessName, q.rcNumber, q.logo, q.businessContact);
     const x = doc.page.margins.left;
     const w = doc.page.width - x - doc.page.margins.right;
 
     doc.font('reg').fontSize(9).fillColor(BRAND.muted);
     doc.text(`Date: ${q.dateWat}`);
-    doc.text(`Billed to: ${q.customerName ?? 'Valued customer'}`);
+    doc.text(`Billed to: ${[q.customerName ?? 'Valued customer', q.customerPhone].filter(Boolean).join(' · ')}`);
     if (q.validUntilLabel) { doc.font('bold').fillColor(BRAND.red).text(`Valid until: ${q.validUntilLabel}`); }
     doc.moveDown();
 
@@ -223,6 +230,11 @@ export function quotePdf(q: QuoteInput): Promise<Buffer> {
     doc.text(ngn(q.total), x + w * 0.7, y, { width: w * 0.3, align: 'right' });
     doc.x = x; doc.moveDown(1);
 
+    if (q.planLines?.length) {
+      doc.font('bold').fontSize(8).fillColor(BRAND.green).text('PAYMENT PLAN', x, doc.y, { width: w });
+      for (const l of q.planLines) doc.font('reg').fontSize(9).fillColor(BRAND.ink).text(`• ${l}`, x + 6, doc.y + 2, { width: w - 6 });
+      doc.x = x; doc.moveDown(0.8);
+    }
     if (q.payDetails) {
       const boxY = doc.y;
       doc.roundedRect(x, boxY, w, 40, 6).fillColor('#ECFDF3').fill();

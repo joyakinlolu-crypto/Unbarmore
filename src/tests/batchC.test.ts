@@ -18,19 +18,21 @@ const m = vi.hoisted(() => ({
   quota: { ok: true },
   failInsertWith23505Once: { on: false },
   businessUpdates: [] as Record<string, unknown>[],
+  otherUpdates: [] as { table: string; patch: unknown }[],
 }));
 
 vi.mock('../db/supabase.js', () => {
   const table = (name: string) => {
     let filters: [string, unknown][] = [], op: 'select' | 'update' | 'insert' = 'select', patch: any = null, order: [string, boolean] | null = null, lim = 100, wantRow = false;
     const rowsOf = () => {
-      if (name === 'businesses') return [];
+      if (name === 'businesses' || name === 'customers') return [];
       let rows = m.quotes.filter((q) => filters.every(([k, v]) => (k.startsWith('>=') ? String(q[k.slice(2)] ?? '') >= String(v) : k.startsWith('<=') ? String(q[k.slice(2)] ?? '') <= String(v) : q[k] === v)));
       if (order) rows = [...rows].sort((a, b) => (order![1] ? a[order![0]] - b[order![0]] : b[order![0]] - a[order![0]]));
       return rows.slice(0, lim);
     };
     const exec = () => {
       if (name === 'businesses') { if (op === 'update') m.businessUpdates.push(patch); return { data: null, error: null }; }
+      if (name === 'customers') { if (op === 'update') m.otherUpdates.push({ table: name, patch }); return { data: null, error: null }; }
       if (op === 'insert') {
         if (m.failInsertWith23505Once.on) { m.failInsertWith23505Once.on = false; return { data: null, error: { code: '23505' } }; }
         const row = { id: `q-${m.quotes.length + 1}`, status: 'open', paid_method: null, ...patch };
@@ -64,7 +66,7 @@ vi.mock('../db/supabase.js', () => {
     signedUrl: vi.fn(async (_b: string, p: string) => `https://files.test/${p}`),
     createPendingBatch: vi.fn(async (_a: unknown, _s: string, drafts: any[]) => { m.batches.push(drafts); return { batchId: `batch-${m.batches.length}`, rows: [] }; }),
     confirmBatch: vi.fn(async () => { throw new Error('quotes must not confirm the batch themselves: confirmAndRespond does it'); }),
-    downloadFile: vi.fn(), updateBusiness: vi.fn(), setSession: vi.fn(),
+    downloadFile: vi.fn(), updateBusiness: vi.fn(), setSession: vi.fn(), upsertCustomer: vi.fn(async () => 'cust-1'),
   };
 });
 vi.mock('../flows/ledger.js', () => ({
@@ -94,7 +96,7 @@ const actor = (tier: keyof typeof PLANS = 'starter_5k', extra: Record<string, un
 }) as never;
 const req = { customer_name: 'Mama Tunde', lines: [{ item_name: 'Lace', quantity: 2, unit_price_ngn: 50_000 }, { item_name: 'Gele', quantity: 1, unit_price_ngn: 5_000 }], delivery_fee_ngn: 2_000 };
 
-beforeEach(() => { m.quotes.length = 0; m.uploaded.length = 0; m.batches.length = 0; m.confirmed.length = 0; m.quota.ok = true; m.failInsertWith23505Once.on = false; m.businessUpdates.length = 0; });
+beforeEach(() => { m.quotes.length = 0; m.uploaded.length = 0; m.batches.length = 0; m.confirmed.length = 0; m.quota.ok = true; m.failInsertWith23505Once.on = false; m.businessUpdates.length = 0; m.otherUpdates.length = 0; });
 
 describe('quote rules (pure)', () => {
   it('totals include delivery; numbers are Q-001 style', () => {
@@ -114,11 +116,11 @@ describe('quote rules (pure)', () => {
     expect(expiryPhrase(null)).toBe('no expiry');
   });
   it.each([
-    ['INV-014 PAID', { no: 14, action: 'paid', method: null }], ['Q-014 PAID', { no: 14, action: 'paid', method: null }], ['invoice 14 paid cash', { no: 14, action: 'paid', method: 'cash' }], ['inv14 extend 7', { no: 14, action: 'extend', days: 7 }], ['q14 paid cash', { no: 14, action: 'paid', method: 'cash' }], ['Quote 14 paid transfer', { no: 14, action: 'paid', method: 'transfer' }],
+    ['INV-014 PAID', { no: 14, action: 'paid', method: null, amount: null }], ['Q-014 PAID', { no: 14, action: 'paid', method: null, amount: null }], ['invoice 14 paid cash', { no: 14, action: 'paid', method: 'cash', amount: null }], ['inv14 extend 7', { no: 14, action: 'extend', days: 7 }], ['INV-014 PAID 50k', { no: 14, action: 'paid', method: null, amount: 50_000 }], ['inv-14 paid 50,000 transfer', { no: 14, action: 'paid', method: 'transfer', amount: 50_000 }], ['INV-014 paid cash ₦12500', { no: 14, action: 'paid', method: 'cash', amount: 12_500 }], ['q14 paid cash', { no: 14, action: 'paid', method: 'cash', amount: null }], ['Quote 14 paid transfer', { no: 14, action: 'paid', method: 'transfer', amount: null }],
     ['Q-014 extend 7', { no: 14, action: 'extend', days: 7 }], ['q-14 EXTEND', { no: 14, action: 'extend', days: 3 }], ['Q-014 cancel', { no: 14, action: 'cancel' }],
   ])('"%s" is a quote command', (t, want) => { expect(parseQuoteCommand(t)).toEqual(want); });
   it('lookalikes are not quote commands', () => {
-    for (const no of ['INV-014', 'invoice for Ada 2 lace', 'invoices', 'Q-014', 'paid Q-014', 'Q-014 PAID maybe', 'quote for Ada 2 lace', 'quotes', 'Q-014 extend soon', 'Q-014 cancel it']) expect(parseQuoteCommand(no)).toBeNull();
+    for (const no of ['INV-014 paid 50k 60k', 'INV-014 paid cash pos', 'INV-014 paid lots',  'INV-014', 'invoice for Ada 2 lace', 'invoices', 'Q-014', 'paid Q-014', 'Q-014 PAID maybe', 'quote for Ada 2 lace', 'quotes', 'Q-014 extend soon', 'Q-014 cancel it']) expect(parseQuoteCommand(no)).toBeNull();
   });
   it('MY ACCOUNT parsing', () => {
     expect(parsePayDetailsCommand('MY ACCOUNT GTBank 0123456789 Ada Fabrics')).toEqual({ text: 'GTBank 0123456789 Ada Fabrics' });
@@ -171,7 +173,7 @@ describe('marking a quote paid records the sale exactly once', () => {
   it('asks HOW it was paid (cash vs transfer matter for the drawer) when not told', async () => {
     await createQuote(actor(), req);
     const r = await quotePaid(actor(), { id: 'q-1' }, null);
-    expect(buttons(r)).toEqual(['QPM:q-1:transfer', 'QPM:q-1:cash', 'QPM:q-1:pos']); expect(m.batches).toHaveLength(0);
+    expect(buttons(r)).toEqual(['QPM:q-1:transfer:107000', 'QPM:q-1:cash:107000', 'QPM:q-1:pos:107000']); expect(m.batches).toHaveLength(0);
   });
   it('paid by cash → one sale line per item + delivery, fully paid, attached to the customer; quote closed', async () => {
     await createQuote(actor(), req);
@@ -371,5 +373,110 @@ describe('descriptions on receipts and quotes (colour, size, notes)', () => {
     expect(body(r)).toContain('2 × Lace (blue, 5 yards)');
     await quotePaid(actor(), { no: 1 }, 'cash');
     expect(m.batches[0]![0].description).toBe('2 × Lace (blue, 5 yards)');
+  });
+});
+
+describe('invoice: customer phone, payment plan, part-payments', () => {
+  const T = '2026-11-28';
+  it('a plan always adds up to the invoice EXACTLY: the last instalment is the remainder', async () => {
+    const { buildPlan } = await import('../lib/quote.js');
+    const p = buildPlan(107_001, { instalments: [{ percent: 50 }, { percent: 25, due_in_days: 14 }, { percent: 25, due_in_days: 28 }] }, T)!;
+    expect(p.map((x) => x.amount)).toEqual([53_501, 26_750, 26_750]); expect(p.reduce((a, x) => a + x.amount, 0)).toBe(107_001);
+    expect(p.map((x) => x.due)).toEqual(['2026-11-28', '2026-12-12', '2026-12-26']); expect(p.map((x) => x.label)).toEqual(['Deposit', 'Instalment 2', 'Balance']);
+  });
+  it('fixed naira, default two-week spacing, and the owner\'s own labels', async () => {
+    const { buildPlan } = await import('../lib/quote.js');
+    const p = buildPlan(100_000, { instalments: [{ amount_ngn: 30_000, label: 'Deposit' }, { amount_ngn: 30_000 }, { label: 'Final' }] }, T)!;
+    expect(p.map((x) => x.amount)).toEqual([30_000, 30_000, 40_000]); expect(p.map((x) => x.due)).toEqual(['2026-11-28', '2026-12-12', '2026-12-26']); expect(p[2]!.label).toBe('Final');
+  });
+  it('unusable plans are refused, not guessed: one instalment, earlier ones already ≥ the total, out-of-order dates, junk', async () => {
+    const { buildPlan } = await import('../lib/quote.js');
+    expect(buildPlan(100_000, { instalments: [{ percent: 100 }] }, T)).toBeNull();
+    expect(buildPlan(100_000, { instalments: [{ amount_ngn: 100_000 }, { amount_ngn: 5_000 }] }, T)).toBeNull();
+    expect(buildPlan(100_000, { instalments: [{ percent: 40, due_in_days: 30 }, { percent: 60, due_in_days: 10 }] }, T)).toBeNull();
+    expect(buildPlan(100_000, { instalments: [{ percent: 0 }, { percent: 50 }] }, T)).toBeNull();
+    expect(buildPlan(100_000, undefined, T)).toBeNull(); expect(buildPlan(0, { instalments: [{ percent: 50 }, { percent: 50 }] }, T)).toBeNull();
+    expect(buildPlan(100_000, { instalments: Array.from({ length: 9 }, () => ({ percent: 10 })) }, T)!.length).toBeLessThanOrEqual(6);
+    expect(buildPlan(100_000, { instalments: [{ percent: 50 }, { percent: 50, due_in_days: 9999 }] }, T)![1]!.due).toBe('2027-11-28');   // capped at a year
+  });
+  it('plan lines read plainly, and the next due date follows what has been paid', async () => {
+    const { buildPlan, planLine, nextDueAfterPaid } = await import('../lib/quote.js');
+    const p = buildPlan(100_000, { instalments: [{ percent: 50 }, { percent: 50, due_in_days: 14 }] }, T)!;
+    expect(p.map((x) => planLine(x, T))).toEqual(['Deposit: ₦50,000 on issue', 'Balance: ₦50,000 by Sat 12 Dec']);
+    expect(nextDueAfterPaid(p, 0)).toBe(T); expect(nextDueAfterPaid(p, 50_000)).toBe('2026-12-12'); expect(nextDueAfterPaid(p, 100_000)).toBeNull();
+  });
+  it('the issuer\'s contact line and the customer\'s line', async () => {
+    const { businessContact, personLine } = await import('../lib/contact.js');
+    expect(businessContact({ sales_phone: '2348031234567', owner_phone: '2348000000001', address: ' 12 Bode Street, Ibadan ' })).toBe('Tel 0803 123 4567 · 12 Bode Street, Ibadan');
+    expect(businessContact({ owner_phone: '2348031234567' })).toBe('Tel 0803 123 4567'); expect(businessContact({})).toBeNull();
+    expect(personLine('Mama Tunde', '2348031234567')).toBe('Mama Tunde · 0803 123 4567'); expect(personLine('Mama Tunde', null)).toBe('Mama Tunde'); expect(personLine(null, null)).toBeNull();
+  });
+
+  it('an invoice made with a phone and a plan keeps both, and shows them in the WhatsApp message', async () => {
+    const r = await createQuote(actor('starter_5k'), { customer_name: 'Mama Tunde', customer_phone: '0803 123 4567', lines: [{ item_name: 'Lace', quantity: 2, unit_price_ngn: 50_000 }], delivery_fee_ngn: 7_000,
+      payment_plan: { instalments: [{ percent: 50 }, { percent: 50, due_in_days: 14 }] } });
+    const t = body(r);
+    expect(m.quotes[0]).toMatchObject({ customer_phone: '2348031234567', total_ngn: 107_000 }); expect(m.quotes[0]!.payment_plan).toHaveLength(2);
+    expect(t).toContain('📞 0803 123 4567'); expect(t).toContain('Payment plan'); expect(t).toContain('Deposit: ₦53,500 on issue'); expect(t).toContain('Balance: ₦53,500 by'); expect(t).toContain('INV-001 PAID 53500');
+    expect(m.otherUpdates.some((u) => u.table === 'customers' && (u.patch as { phone_number: string }).phone_number === '2348031234567')).toBe(true);   // the customer's number is remembered
+  });
+  it('a plan the AI got wrong does not break the invoice: it is made without one, and the owner is told', async () => {
+    const r = await createQuote(actor(), { customer_name: 'Ada', lines: [{ item_name: 'Lace', quantity: 1, unit_price_ngn: 50_000 }], payment_plan: { instalments: [{ percent: 100 }, { percent: 10 }] } });
+    expect(body(r)).toContain('could not make sense of the payment plan'); expect(m.quotes[0]!.payment_plan).toBeNull();
+  });
+  it('a bad phone number is ignored, not stored', async () => {
+    await createQuote(actor(), { customer_name: 'Ada', customer_phone: 'call me', lines: [{ item_name: 'Lace', quantity: 1, unit_price_ngn: 50_000 }] });
+    expect(m.quotes[0]!.customer_phone).toBeNull();
+  });
+
+  it('a deposit records the WHOLE sale, what was received, and the rest as the customer\'s debt with the next due date', async () => {
+    await createQuote(actor(), { customer_name: 'Mama Tunde', lines: [{ item_name: 'Lace', quantity: 2, unit_price_ngn: 50_000 }, { item_name: 'Gele', quantity: 1, unit_price_ngn: 5_000 }], delivery_fee_ngn: 2_000,
+      payment_plan: { instalments: [{ percent: 50 }, { percent: 50, due_in_days: 14 }] } });
+    m.otherUpdates.length = 0;
+    const r = await quotePaid(actor(), { no: 1 }, 'transfer', 53_500);
+    const lines = m.batches[0]!.map((d: any) => [d.description, d.total_amount_ngn, d.amount_paid_ngn]);
+    expect(lines).toEqual([['2 × Lace', 100_000, 53_500], ['1 × Gele', 5_000, 0], ['Delivery', 2_000, 0]]);          // money received fills the lines in order
+    expect(m.batches[0]!.reduce((a: number, d: any) => a + d.amount_paid_ngn, 0)).toBe(53_500); expect(m.batches[0]!.every((d: any) => d.customer_name === 'Mama Tunde')).toBe(true);
+    expect(m.quotes[0]).toMatchObject({ status: 'paid', paid_method: 'transfer' });
+    const t = body(r); expect(t).toContain('₦53,500 received'); expect(t).toContain('Mama Tunde still owes ₦53,500'); expect(t).toContain('remind you that morning'); expect(t).toContain('CHASE');
+    const due = m.otherUpdates.find((u) => u.table === 'customers' && 'debt_due_date' in (u.patch as object));
+    expect((due!.patch as { debt_due_date: string }).debt_due_date).toBe(m.quotes[0]!.payment_plan[1].due);
+  });
+  it('a part-payment needs a name; more than the invoice is refused; asking how they paid keeps the amount', async () => {
+    await createQuote(actor(), { lines: [{ item_name: 'Lace', quantity: 1, unit_price_ngn: 50_000 }] });          // no customer name
+    expect(body(await quotePaid(actor(), { no: 1 }, 'cash', 20_000))).toContain('need the customer\'s name'); expect(m.batches).toHaveLength(0); expect(m.quotes[0]!.status).toBe('open');
+    expect(body(await quotePaid(actor(), { no: 1 }, 'cash', 60_000))).toContain('more than the invoice');
+    await createQuote(actor(), { customer_name: 'Ada', lines: [{ item_name: 'Lace', quantity: 1, unit_price_ngn: 50_000 }] });
+    const ask = await quotePaid(actor(), { no: 2 }, null, 20_000);
+    expect(buttons(ask)).toEqual(['QPM:q-2:transfer:20000', 'QPM:q-2:cash:20000', 'QPM:q-2:pos:20000']); expect(m.batches).toHaveLength(0);
+  });
+  it('a full payment is unchanged: every line fully paid, no debt, no due date', async () => {
+    await createQuote(actor(), { customer_name: 'Ada', lines: [{ item_name: 'Lace', quantity: 1, unit_price_ngn: 50_000 }] });
+    await quotePaid(actor(), { no: 1 }, 'cash');
+    expect(m.batches[0]!.map((d: any) => [d.total_amount_ngn, d.amount_paid_ngn])).toEqual([[50_000, 50_000]]); expect(m.otherUpdates.some((u) => 'debt_due_date' in (u.patch as object))).toBe(false);
+  });
+
+  it('MY ADDRESS: owner only, a real address, saved', async () => {
+    const { parseAddressCommand } = await import('../lib/quote.js');
+    expect(parseAddressCommand('MY ADDRESS 12 Bode Street, Ibadan')).toEqual({ text: '12 Bode Street, Ibadan' }); expect(parseAddressCommand('my address')).toBe('show'); expect(parseAddressCommand('my addressee is Ada')).toBeNull();
+    const { addressReply } = await import('../flows/quotes.js');
+    expect(body(await addressReply(actor(), { text: '12 Bode Street, Ibadan' }))).toContain('12 Bode Street, Ibadan'); expect(m.businessUpdates).toContainEqual({ address: '12 Bode Street, Ibadan' });
+    expect(body(await addressReply(actor(), { text: 'hi' }))).toContain('too short');
+    expect(body(await addressReply({ ...(actor() as object), isStaff: true } as never, { text: '12 Bode Street' }))).toContain('Only the shop owner');
+  });
+
+  const hasPdftotext = (() => { try { execFileSync('pdftotext', ['-v'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+  it.skipIf(!hasPdftotext)('the invoice PDF: issuer contact under the business name, customer name and phone on top, and the payment plan', async () => {
+    const pdf = await quotePdf({ businessName: 'Ada Fabrics', rcNumber: 'BN 7978345', quoteLabel: 'INV-014', dateWat: 'Sat 28 Nov', customerName: 'Mama Tunde', customerPhone: '0803 123 4567', businessContact: 'Tel 0802 000 1111 · 12 Bode Street, Ibadan',
+      lines: [{ item: 'Lace', qty: 2, unit: 50_000, amount: 100_000 }], deliveryFee: 0, total: 100_000, validUntilLabel: 'Tue 1 Dec', planLines: ['Deposit: ₦50,000 on issue', 'Balance: ₦50,000 by Sat 12 Dec'] });
+    fs.writeFileSync('/tmp/inv-plan.pdf', pdf); const t = execFileSync('pdftotext', ['-layout', '/tmp/inv-plan.pdf', '-'], { encoding: 'utf8' });
+    for (const s of ['INVOICE', 'INV-014', 'Ada Fabrics', 'BN 7978345', 'Tel 0802 000 1111', '12 Bode Street, Ibadan', 'Billed to: Mama Tunde · 0803 123 4567', 'PAYMENT PLAN', 'Deposit: ₦50,000 on issue', 'Balance: ₦50,000 by Sat 12 Dec']) expect(t).toContain(s);
+    expect(t.indexOf('Billed to')).toBeLessThan(t.indexOf('Lace'));                                  // the customer is at the TOP, above the items
+  });
+  it.skipIf(!hasPdftotext)('the receipt PDF: the business issuing it (with contact) and who it is issued to (with phone)', async () => {
+    const { receiptPdf } = await import('../services/pdfGenerator.js');
+    const pdf = await receiptPdf({ businessName: 'Ada Fabrics', rcNumber: 'BN 7978345', businessContact: 'Tel 0802 000 1111 · 12 Bode Street, Ibadan', receiptNumber: 'R1', dateWat: '28 Nov 2026', customerName: 'Mama Tunde', customerPhone: '0803 123 4567', lines: [{ description: '1 × Gele', quantity: 1, unitPrice: 5_000, amount: 5_000 }], amountPaid: 5_000, paymentMethod: 'cash' });
+    fs.writeFileSync('/tmp/r-issuer.pdf', pdf); const t = execFileSync('pdftotext', ['-layout', '/tmp/r-issuer.pdf', '-'], { encoding: 'utf8' });
+    for (const s of ['RECEIPT', 'Ada Fabrics', 'BN 7978345', 'Tel 0802 000 1111', '12 Bode Street, Ibadan', 'Issued to: Mama Tunde · 0803 123 4567']) expect(t).toContain(s);
   });
 });

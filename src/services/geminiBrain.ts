@@ -84,11 +84,20 @@ export const BrainSchema = z.object({
     .optional(),
   quote: z.object({
     customer_name: z.string().optional(),
+    customer_phone: z.string().max(30).optional().describe('The customer\'s phone number exactly as given, if the owner said it ("his number is 0803 123 4567"). Omit if not given.'),
     lines: z.array(z.object({ item_name: z.string(), item_detail: z.string().max(80).optional().describe('Colour, size, material or a note about this item, if the owner gave one.'), quantity: z.number().positive(), unit_price_ngn: Naira })).min(1),
     valid_days: z.number().int().min(1).max(90).optional().describe('How many days the price is held, only if the owner said ("valid 3 days", "for one week" = 7).'),
     delivery_fee_ngn: Naira.optional(),
     note: z.string().max(160).optional(),
-  }).optional().describe('CREATE_QUOTE: the items of the quote/invoice.'),
+    payment_plan: z.object({
+      instalments: z.array(z.object({
+        percent: z.number().min(1).max(100).optional().describe('Share of the total, e.g. 50 for "half".'),
+        amount_ngn: Naira.optional().describe('A fixed amount for this instalment, if the owner gave naira instead of a percent.'),
+        due_in_days: z.number().int().min(0).max(365).optional().describe('Days after the invoice is issued. 0 = now / on issue. "in 2 weeks" = 14, "next month" = 30.'),
+        label: z.string().max(24).optional().describe('Deposit, Balance, ... only if the owner named it.'),
+      })).min(2).max(6),
+    }).optional().describe('ONLY if the owner offers a payment plan or instalments ("half now, half in 2 weeks", "pay in 3 months", "deposit 50k and balance end of month"). Instalments in time order. Omit when they just want one payment.'),
+  }).optional().describe('CREATE_QUOTE: the items of the invoice.'),
   video_request: z
     .object({ product_name: z.string().optional(), price_ngn: Naira.optional(), delivery_info: z.string().optional() })
     .optional(),
@@ -233,7 +242,7 @@ Classify the message into exactly one intent and fill ONLY that intent's field:
   Write 2 warm, confident Nigerian closing replies: one value-anchoring, one urgency/scarcity or bundle. Never insult. Never discount more than 10% unless the user said so.
 - CREATE_VIDEO_SCRIPT → "video_request". User wants an ad/video/promo for a product. Extract any name, price, delivery info.
 - QUERY_BUSINESS → "query". QUESTIONS about their own recorded numbers: profit, who owes (all, or one named customer via customer_name), best sellers, best customers, slow stock, expenses, stock left, cash today, "my customers / my client list" (kind customers), "who has stopped buying / my inactive customers" (kind lapsed_customers). A question has a question form ("who owes me?", "how much does Femi owe?"); a statement of debts is RECORD_DEBTS.
-- CREATE_QUOTE → "quote" (this is an INVOICE: in Nigeria an invoice is what is sent to a customer to say what a job or goods will cost, valid for a period; "quote", "quotation" and "proforma" mean the same). The owner asks you to make an INVOICE (or quote/quotation/proforma) for a customer: "make an invoice for Mama Tunde, 2 lace at 50k each and 1 gele 5k", "send Ada a quote for 3 bags of rice 45k each, valid for 3 days, delivery 2k". lines = one entry per item with the quantity and the price of ONE unit (if only a line total is given, divide it by the quantity). valid_days only if they say how long the price holds. This is NOT a sale: nothing is recorded until the customer pays. A sale that already HAPPENED ("sold 2 lace 50k") is LOG_TRANSACTION, never CREATE_QUOTE. A request for a receipt for a past sale is not a quote.
+- CREATE_QUOTE → "quote" (this is an INVOICE: in Nigeria an invoice is what is sent to a customer to say what a job or goods will cost, valid for a period; "quote", "quotation" and "proforma" mean the same). The owner asks you to make an INVOICE (or quote/quotation/proforma) for a customer: "make an invoice for Mama Tunde, 2 lace at 50k each and 1 gele 5k", "send Ada a quote for 3 bags of rice 45k each, valid for 3 days, delivery 2k". lines = one entry per item with the quantity and the price of ONE unit (if only a line total is given, divide it by the quantity). valid_days only if they say how long the price holds. Fill customer_phone if the owner gives the customer's number, and payment_plan only if they offer instalments ("half now, half in 2 weeks"). This is NOT a sale: nothing is recorded until the customer pays. A sale that already HAPPENED ("sold 2 lace 50k") is LOG_TRANSACTION, never CREATE_QUOTE. A request for a receipt for a past sale is not a quote.
 - SAVE_LOGO → no field. ONLY when an image is attached and it is clearly a business LOGO or brand mark: flat artwork such as an emblem, monogram or wordmark on a plain or simple background, usually with the business name in stylised letters, and NOTHING else is being asked. A photo of goods, people, a shop, a document, a receipt or a bank screenshot is NEVER SAVE_LOGO. A photo of a product with a label on it is a product photo. If you are unsure, it is not a logo.
 - CHASE_DEBTS → no field. They want reminder messages for people who OWE THEM money ("remind everyone owing me", "chase my debtors"). Messaging all customers in general ("message all my customers", promotions, broadcasts) is NOT_SUPPORTED with not_supported=OTHER, never CHASE_DEBTS.
 - UNDO_LAST → no field. They want the last entry removed ("delete the last entry", "cancel that").

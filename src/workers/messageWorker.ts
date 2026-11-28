@@ -28,8 +28,8 @@ import { parseChaseCommand, parsePromise } from '../lib/debtReminders.js';
 import { recordPromise } from '../flows/promises.js';
 import { occurredAt } from '../lib/sentAt.js';
 import { cashCountReply, splitCommandReply } from '../flows/cashCount.js';
-import { createQuote, payDetailsReply, quoteCancel, quoteExtend, quotePaid, quotesListReply } from '../flows/quotes.js';
-import { parsePayDetailsCommand, parseQuoteCommand } from '../lib/quote.js';
+import { addressReply, createQuote, payDetailsReply, quoteCancel, quoteExtend, quotePaid, quotesListReply } from '../flows/quotes.js';
+import { parseAddressCommand, parsePayDetailsCommand, parseQuoteCommand } from '../lib/quote.js';
 import { FLYER_HELP, FLYER_PER_DAY, flyerReply, isFlyerCaption, logoColourPicker, makeLogoReply, parseFlyerOptions } from '../flows/flyer.js';
 import { parseCount } from '../lib/cashCount.js';
 import { remakeLastVideo, startVideo } from '../flows/video.js';
@@ -457,11 +457,13 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   }
   const qcmd = parseQuoteCommand(t);
   if (qcmd) {
-    if (qcmd.action === 'paid') return quotePaid(actor, { no: qcmd.no }, qcmd.method);
+    if (qcmd.action === 'paid') return quotePaid(actor, { no: qcmd.no }, qcmd.method, qcmd.amount);
     if (qcmd.action === 'extend') return quoteExtend(actor, { no: qcmd.no }, qcmd.days);
     return quoteCancel(actor, { no: qcmd.no });
   }
   if (['INVOICES', 'MY INVOICES', 'OPEN INVOICES', 'INVOICE', 'QUOTES', 'MY QUOTES', 'OPEN QUOTES'].includes(upper)) return quotesListReply(actor);
+  const addrCmd = parseAddressCommand(t);
+  if (addrCmd) return addressReply(actor, addrCmd);
   const payCmd = parsePayDetailsCommand(t);
   if (payCmd) return payDetailsReply(actor, payCmd);
   if (['FLYER', 'MAKE FLYER', 'FLYERS'].includes(upper)) return reply(actor.phone).text(...FLYER_HELP);
@@ -565,7 +567,7 @@ function helpMenu(actor: Actor): Reply {
     '🧠 Ask me about your business: pricing, customers, stock, cash flow',
     '',
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
-    '📄 Say "invoice for Mama Tunde, 2 lace 50k each" for a branded invoice · INVOICES · INV-014 PAID · MY ACCOUNT (bank details on invoices)',
+    '📄 Say "invoice for Mama Tunde, 2 lace 50k each" for a branded invoice · INVOICES · INV-014 PAID · MY ACCOUNT (bank details) · MY ADDRESS (shown on receipts and invoices)',
     '🖼️ FLYER — free "Available now" picture for your Status · MAKE LOGO — a free logo',
     '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 SUPPORT',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
@@ -597,7 +599,7 @@ function plansMenu(actor: Actor): Reply {
 // ═════════════════════════ BUTTONS ═════════════════════════
 
 async function onButton(actor: Actor, id: string, session: Session): Promise<Reply | null> {
-  const [kind, a, b2] = id.split(':');
+  const [kind, a, b2, c2] = id.split(':');
   switch (kind) {
     case 'TXC': return confirmAndRespond(actor, a!, async (pid) => (await redis.set(`costask:${pid}`, '1', 'EX', 3 * 86_400, 'NX')) === 'OK');
     case 'TXE':
@@ -627,7 +629,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       return customerReceiptReply(actor, batch);
     }
     case 'QPAID': return quotePaid(actor, { id: a }, null);
-    case 'QPM': return quotePaid(actor, { id: a }, (['cash', 'transfer', 'pos'] as const).find((m) => m === b2) ?? null);
+    case 'QPM': return quotePaid(actor, { id: a }, (['cash', 'transfer', 'pos'] as const).find((m) => m === b2) ?? null, c2 && /^\d+$/.test(c2) ? Number(c2) : null);
     case 'QEXT': return quoteExtend(actor, { id: a }, 3);
     case 'QCAN': return quoteCancel(actor, { id: a });
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));

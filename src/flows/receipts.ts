@@ -1,7 +1,9 @@
 import { env } from '../config/env.js';
 import { PLANS } from '../config/plans.js';
 import { consumeQuota, db, getBatchRows, setReceiptUrl, signedUrl, uploadFile, type Actor } from '../db/supabase.js';
+import { businessContact } from '../lib/contact.js';
 import { ngn, ngnShort } from '../lib/money.js';
+import { displayPhone } from '../lib/phone.js';
 import { receiptPdf } from '../services/pdfGenerator.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { loadLogo, logoPrompt } from './branding.js';
@@ -111,6 +113,7 @@ export async function customerReceiptReply(actor: Actor, batchId: string | null,
 
   const pdf = await receiptPdf({
     businessName: actor.business.name, rcNumber: actor.business.rc_number, receiptNumber, dateWat: date, customerName: customer,
+    customerPhone: displayPhone(rows.find((t) => t.customers?.phone_number)?.customers?.phone_number ?? null), businessContact: businessContact(actor.business),
     lines, amountPaid, paymentMethod: method || '—', remainingBalance: remaining, balanceAsAt: fmtDate(new Date().toISOString()),
     logo: await loadLogo(actor.business),
     promo: PLANS[actor.business.subscription_tier].watermark === 'none' ? null : { botNumber: env.WHATSAPP_DISPLAY_NUMBER, referralCode: actor.business.referral_code, businessName: actor.business.name },

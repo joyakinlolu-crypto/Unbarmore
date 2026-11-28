@@ -45,6 +45,8 @@ export interface Business {
   referral_apply_to_renewal?: boolean;
   /** Evening profit split "restock/reserve/pay", e.g. 50/20/30. NULL = default. Needs migration 010. */
   setaside_split?: string | null;
+  /** Printed under the business name on receipts and invoices. Needs migration 013. */
+  address?: string | null;
   /** "GTBank 0123456789 Ada Fabrics": printed on quotes. Needs migration 011. */
   pay_details?: string | null;
   total_value_recovered_ngn: number;
@@ -323,8 +325,8 @@ export async function createPendingBatch(
   return { batchId, rows: inserted };
 }
 
-export async function getBatchRows(batchId: string): Promise<(TxnRow & { customers: { name: string } | null })[]> {
-  return must(await db.from('transactions').select('*, customers(name)').eq('batch_id', batchId).order('created_at'), 'getBatchRows');
+export async function getBatchRows(batchId: string): Promise<(TxnRow & { customers: { name: string; phone_number?: string | null } | null })[]> {
+  return must(await db.from('transactions').select('*, customers(name, phone_number)').eq('batch_id', batchId).order('created_at'), 'getBatchRows');
 }
 
 export async function confirmBatch(batchId: string): Promise<number> {
