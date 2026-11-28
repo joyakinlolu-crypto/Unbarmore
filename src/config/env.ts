@@ -49,7 +49,7 @@ const schema = z.object({
   GEMINI_TTS_FALLBACK_MODEL: z.string().default('gemini-3.1-flash-tts-preview'),
   /** Safety net. Google caps the two models above at 10 requests a DAY ("Free Tier"), even on a paid key; this one is billed normally. */
   GEMINI_TTS_BACKUP_MODEL: z.string().default('gemini-2.5-flash-preview-tts'),
-  GOOGLE_TTS_VOICE: z.string().default('en-NG-Chirp3-HD-Achird'),
+  GOOGLE_TTS_VOICE: z.string().default('en-US-Chirp3-HD-Achird'),
   /**
    * Google CLOUD Text-to-Speech (a different service from the Gemini API's speech models, which Google caps at 10 requests a day per
    * model on a free-tier quota). Needs a service account on the Google Cloud project: paste its JSON key (raw JSON, or base64 of it).
@@ -58,7 +58,8 @@ const schema = z.object({
   GOOGLE_TTS_CREDENTIALS_JSON: z.string().optional(),
   /** The Gemini voice model served by Cloud TTS (same "Kore" voice as before, billed per token, per-minute rather than per-day limits). Empty = use the named voice GOOGLE_TTS_VOICE instead. */
   GOOGLE_TTS_MODEL: z.string().default('gemini-2.5-flash-tts'),
-  GOOGLE_TTS_LANG: z.string().default('en-US'),
+  /** Language code for the Gemini voice through Cloud. en-NG gives a Nigerian English accent (verified: Google lists Gemini voices for en-NG, none for Yoruba/Hausa/Igbo). */
+  GOOGLE_TTS_LANG: z.string().default('en-NG'),
   GOOGLE_TTS_YORUBA_LANG: z.string().default('yo-NG'),
   AZURE_SPEECH_KEY: z.string().optional(),
   AZURE_SPEECH_REGION: z.string().default('westeurope'),

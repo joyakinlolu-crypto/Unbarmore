@@ -29,29 +29,52 @@ export async function cloudVoiceStatus(yoruba = false): Promise<string> {
   if (!raw?.trim()) return 'NOT SET: this server has no GOOGLE_TTS_CREDENTIALS_JSON. Check the variable name is exactly that, it is on the Unbarmore service, and Railway finished redeploying.';
   const creds = parseCloudCredentials(raw);
   if (!creds) return `UNREADABLE: the variable is set (${raw.trim().length} characters, ${raw.trim().startsWith('{') ? 'starts with {' : 'does not start with {'}) but it is not a service-account key. It must be the key file's JSON, or the base64 of that file, containing "client_email" and "private_key".`;
-  try { await cloudTts('Test.', yoruba); return `WORKING (service account ${creds.client_email.replace(/^(.{3}).*(@.*)$/, '$1…$2')}).`; }
-  catch (e) { return `REJECTED by Google: ${String((e as Error)?.message ?? e).replace(/-----BEGIN[\s\S]*?END[^-]*-----/g, '[key]').replace(/\s+/g, ' ').slice(0, 320)}`; }
+  const clean = (e: unknown) => String((e as Error)?.message ?? e).replace(/-----BEGIN[\s\S]*?END[^-]*-----/g, '[key]').replace(/\s+/g, ' ').slice(0, 220);
+  const [g, n] = await Promise.all([cloudTts('Test.', yoruba, 'gemini').then(() => 'ok', clean), yoruba ? Promise.resolve('n/a') : cloudTts('Test.', false, 'named').then(() => 'ok', clean)]);
+  const gem = g === 'ok' ? 'Nigerian Gemini voice WORKING' : `Nigerian Gemini voice REJECTED (${g})`;
+  const named = n === 'n/a' ? '' : n === 'ok' ? '; regular Google voice WORKING' : `; regular Google voice REJECTED (${n})`;
+  return `${g === 'ok' || n === 'ok' ? 'WORKING' : 'REJECTED'}: ${gem}${named}.`;
 }
 
-/** Google Cloud Text-to-Speech: the Gemini voice model through Cloud (or a named voice). Throws on any failure so the caller can fall back. */
-async function cloudTts(text: string, yoruba: boolean): Promise<Voiceover> {
+/**
+ * Google Cloud Text-to-Speech. Two flavours, tried in this order for English/Pidgin:
+ *  'gemini' = the Gemini voice model served by Cloud (Nigerian English accent, en-NG). Needs the Vertex AI API enabled on the project.
+ *  'named'  = a regular Google Chirp3-HD voice. Needs nothing extra, so Cloud works from day one.
+ * Google has no Yoruba voice in Cloud, so Yoruba only ever tries 'gemini' (which may refuse) and then falls through to the Gemini API.
+ * Throws on any failure so the caller can fall back.
+ */
+async function cloudTts(text: string, yoruba: boolean, mode: 'gemini' | 'named' = 'gemini'): Promise<Voiceover> {
   const creds = parseCloudCredentials(env.GOOGLE_TTS_CREDENTIALS_JSON);
   if (!creds) throw new Error('Cloud TTS not configured');
-  cloudClient ??= new TextToSpeechClient({ credentials: creds, projectId: creds.project_id });
-  const gemini = !!env.GOOGLE_TTS_MODEL;
+  // REST transport (plain HTTPS): works behind proxies and needs no gRPC native module.
+  cloudClient ??= new TextToSpeechClient({ credentials: creds, projectId: creds.project_id, fallback: 'rest' });
+  const gemini = mode === 'gemini';
+  if (gemini && !env.GOOGLE_TTS_MODEL) throw new Error('Cloud Gemini voice disabled (GOOGLE_TTS_MODEL is empty)');
   const [res] = await cloudClient.synthesizeSpeech({
     input: { text },
     voice: gemini
       ? { languageCode: yoruba ? env.GOOGLE_TTS_YORUBA_LANG : env.GOOGLE_TTS_LANG, name: env.GEMINI_TTS_VOICE, modelName: env.GOOGLE_TTS_MODEL }
-      : { languageCode: 'en-NG', name: env.GOOGLE_TTS_VOICE },
+      : { languageCode: env.GOOGLE_TTS_VOICE.split('-').slice(0, 2).join('-'), name: env.GOOGLE_TTS_VOICE },
     audioConfig: { audioEncoding: 'MP3', sampleRateHertz: 24000 },
   });
   if (!res.audioContent) throw new Error('Cloud TTS returned no audio');
   const data = Buffer.from(res.audioContent as Uint8Array);
-  // Cost log: Cloud bills Gemini voices per token (about 25 audio tokens a second, speech ≈ 2.6 words a second).
-  const audioTokens = Math.round((text.split(/\s+/).filter(Boolean).length / 2.6) * 25);
-  recordUsage('voiceover', { promptTokenCount: Math.round(text.length / 4), candidatesTokenCount: audioTokens, candidatesTokensDetails: [{ modality: 'AUDIO', tokenCount: audioTokens }] } as never);
+  if (gemini) {
+    // Cost log: Cloud bills Gemini voices per token (about 25 audio tokens a second, speech ≈ 2.6 words a second).
+    const audioTokens = Math.round((text.split(/\s+/).filter(Boolean).length / 2.6) * 25);
+    recordUsage('voiceover', { promptTokenCount: Math.round(text.length / 4), candidatesTokenCount: audioTokens, candidatesTokensDetails: [{ modality: 'AUDIO', tokenCount: audioTokens }] } as never);
+  }
   return { data, ext: 'mp3', mime: 'audio/mpeg', provider: 'cloud' };
+}
+
+/** Tries the Gemini voice through Cloud, then (English/Pidgin only) the regular Google voice. */
+async function cloudBest(text: string, yoruba: boolean): Promise<Voiceover> {
+  try { return await cloudTts(text, yoruba, 'gemini'); }
+  catch (e) {
+    if (yoruba) throw e;
+    try { return await cloudTts(text, false, 'named'); }
+    catch (e2) { throw new Error(`${String((e as Error)?.message ?? e).slice(0, 200)} | named voice: ${String((e2 as Error)?.message ?? e2).slice(0, 160)}`); }
+  }
 }
 
 const escapeXml = (s: string) => s.replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[c]!);
@@ -114,7 +137,7 @@ export async function synthesizeVoiceover(text: string, opts: { pidgin?: boolean
   if (env.TTS_PROVIDER === 'gemini') {
     // 1) Google Cloud TTS first when a service account is configured: real quotas (per minute, not 10 a day).
     if (parseCloudCredentials(env.GOOGLE_TTS_CREDENTIALS_JSON) && Date.now() >= cloudCoolUntil) {
-      try { return await cloudTts(text, !!opts.yoruba); }
+      try { return await cloudBest(text, !!opts.yoruba); }
       catch (e) {
         const msg = String((e as Error)?.message ?? e);
         if (/quota|resource_exhausted|\b429\b/i.test(msg)) cloudCoolUntil = Date.now() + 2 * 60_000;   // rate limited: use the others for a moment

@@ -6,7 +6,7 @@ vi.hoisted(() => {
     WHATSAPP_DISPLAY_NUMBER: '2348000000000', WHATSAPP_APP_SECRET: 's', WHATSAPP_VERIFY_TOKEN: 'verify-token-123', GEMINI_API_KEY: 'x',
   });
 });
-const m = vi.hoisted(() => ({ synth: vi.fn(), upload: vi.fn(), cloud: { current: 'WORKING (service account tts…@p.iam).' } }));
+const m = vi.hoisted(() => ({ synth: vi.fn(), upload: vi.fn(), cloud: { current: 'WORKING: Nigerian Gemini voice WORKING; regular Google voice WORKING.' } }));
 vi.mock('../services/ttsService.js', () => ({ synthesizeVoiceover: m.synth, cloudVoiceStatus: async () => m.cloud.current }));
 vi.mock('../db/supabase.js', () => ({
   db: {}, addVideoCredits: vi.fn(), isInServiceWindow: vi.fn(),
@@ -39,8 +39,8 @@ describe('admin TEST VOICE', () => {
   });
   it('when Cloud is not being used, the message says exactly why (so nobody has to guess)', async () => {
     m.synth.mockResolvedValue({ data: Buffer.from('x'), ext: 'wav', mime: 'audio/wav', provider: 'gemini' });
-    m.cloud.current = 'REJECTED by Google: 403 Cloud Text-to-Speech API has not been used in project 123 before or it is disabled.';
-    expect((await payload('TEST VOICE')).document.caption).toContain('REJECTED by Google: 403 Cloud Text-to-Speech API has not been used');
+    m.cloud.current = 'WORKING: Nigerian Gemini voice REJECTED (403 Agent Platform API has not been used); regular Google voice WORKING.';
+    expect((await payload('TEST VOICE')).document.caption).toContain('Nigerian Gemini voice REJECTED (403 Agent Platform API');
     m.cloud.current = 'NOT SET: this server has no GOOGLE_TTS_CREDENTIALS_JSON.';
     expect((await payload('TEST VOICE')).document.caption).toContain('NOT SET');
   });

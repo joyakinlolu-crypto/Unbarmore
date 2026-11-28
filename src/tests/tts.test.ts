@@ -139,7 +139,14 @@ describe('Google Cloud Text-to-Speech (the path around the Gemini API\'s 10-a-da
     synth.mockResolvedValue([{ audioContent: Buffer.from('ID3mp3bytes') }]);
     const r = await mod.synthesizeVoiceover('Order now on WhatsApp');
     expect(r.ext).toBe('mp3'); expect(r.mime).toBe('audio/mpeg'); expect(g).not.toHaveBeenCalled();
-    expect(synth.mock.calls[0]![0]).toMatchObject({ input: { text: 'Order now on WhatsApp' }, voice: { languageCode: 'en-US', name: 'Kore', modelName: 'gemini-2.5-flash-tts' } });
+    expect(synth.mock.calls[0]![0]).toMatchObject({ input: { text: 'Order now on WhatsApp' }, voice: { languageCode: 'en-NG', name: 'Kore', modelName: 'gemini-2.5-flash-tts' } });
+  });
+  it('if the Nigerian Gemini voice is refused (e.g. Vertex AI not enabled), the regular Google voice answers, so Cloud still works from day one', async () => {
+    const { mod, g } = await setup(JSON.stringify(sa), 'ok');
+    synth.mockRejectedValueOnce(new Error('7 PERMISSION_DENIED: Agent Platform API has not been used in project 1 before or it is disabled.')).mockResolvedValueOnce([{ audioContent: Buffer.from('ID3named') }]);
+    const r = await mod.synthesizeVoiceover('Order now');
+    expect(r.provider).toBe('cloud'); expect(g).not.toHaveBeenCalled();
+    expect(synth.mock.calls[1]![0].voice).toEqual({ languageCode: 'en-US', name: 'en-US-Chirp3-HD-Achird' });   // no modelName: a plain Google voice
   });
   it('Yoruba asks Cloud for the Yoruba language code', async () => {
     const { mod } = await setup(JSON.stringify(sa));
@@ -157,7 +164,7 @@ describe('Google Cloud Text-to-Speech (the path around the Gemini API\'s 10-a-da
     const { mod, g } = await setup(JSON.stringify(sa), 'ok');
     synth.mockRejectedValue(new Error('8 RESOURCE_EXHAUSTED: quota'));
     await mod.synthesizeVoiceover('One'); await mod.synthesizeVoiceover('Two');
-    expect(synth).toHaveBeenCalledTimes(1);                             // the second video skipped Cloud during the cool-off
+    expect(synth).toHaveBeenCalledTimes(2);                             // first video: Gemini voice + regular voice both tried; the second video skipped Cloud during the cool-off
     expect(g).toHaveBeenCalledTimes(2);
   });
   it('without credentials nothing changes: Cloud is never touched', async () => {
@@ -176,9 +183,11 @@ describe('Google Cloud Text-to-Speech (the path around the Gemini API\'s 10-a-da
     const bad = await mod.cloudVoiceStatus(); expect(bad).toMatch(/^UNREADABLE/); expect(bad).toContain('18 characters'); expect(bad).toContain('starts with {');
     ({ mod } = await setup(JSON.stringify(sa)));
     synth.mockResolvedValue([{ audioContent: Buffer.from('ID3') }]);
-    const ok = await mod.cloudVoiceStatus(); expect(ok).toMatch(/^WORKING/); expect(ok).not.toContain('PRIVATE KEY'); expect(ok).not.toContain(sa.client_email);
+    const ok = await mod.cloudVoiceStatus(); expect(ok).toMatch(/^WORKING: Nigerian Gemini voice WORKING; regular Google voice WORKING/); expect(ok).not.toContain('PRIVATE KEY'); expect(ok).not.toContain(sa.client_email);
     synth.mockRejectedValue(new Error(`7 PERMISSION_DENIED: Cloud Text-to-Speech API has not been used in project 1 before or it is disabled. ${sa.private_key}`));
-    const rej = await mod.cloudVoiceStatus(); expect(rej).toMatch(/^REJECTED by Google: 7 PERMISSION_DENIED/); expect(rej).not.toContain('ABC');
+    const rej = await mod.cloudVoiceStatus(); expect(rej).toMatch(/^REJECTED: Nigerian Gemini voice REJECTED \(7 PERMISSION_DENIED/); expect(rej).toContain('regular Google voice REJECTED'); expect(rej).not.toContain('ABC');
+    synth.mockReset(); synth.mockRejectedValueOnce(new Error('403 Vertex off')).mockResolvedValue([{ audioContent: Buffer.from('ID3') }]);
+    expect(await mod.cloudVoiceStatus()).toMatch(/^WORKING: Nigerian Gemini voice REJECTED \(403 Vertex off\); regular Google voice WORKING/);   // partly working still counts as WORKING, and says what is missing
     delete process.env.GOOGLE_TTS_CREDENTIALS_JSON;
   });
 });
