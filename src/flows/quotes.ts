@@ -1,7 +1,7 @@
 import { PLANS } from '../config/plans.js';
 import { env } from '../config/env.js';
 import { consumeQuota, createPendingBatch, db, signedUrl, uploadFile, type Actor, type TxnDraft } from '../db/supabase.js';
-import { dateLabel, daysLeft, DEFAULT_VALID_DAYS, expiryPhrase, extendedUntil, lineTotal, quoteLabel, quoteSummaryLines, quoteTotal, validUntil, type QuoteLine } from '../lib/quote.js';
+import { cleanDetail, dateLabel, daysLeft, DEFAULT_VALID_DAYS, expiryPhrase, extendedUntil, lineTotal, quoteLabel, quoteSummaryLines, quoteTotal, validUntil, type QuoteLine } from '../lib/quote.js';
 import { ngn, watDateKey } from '../lib/money.js';
 import { quotePdf } from '../services/pdfGenerator.js';
 import { reply, type Reply } from '../services/whatsapp.js';
@@ -12,7 +12,7 @@ import { parseBankDetails } from './payouts.js';
 /** What the brain hands us when the owner asks for a quote / invoice / proforma. */
 export interface QuoteRequest {
   customer_name?: string;
-  lines: { item_name: string; quantity: number; unit_price_ngn: number }[];
+  lines: { item_name: string; item_detail?: string; quantity: number; unit_price_ngn: number }[];
   valid_days?: number;
   delivery_fee_ngn?: number;
   note?: string;
@@ -28,7 +28,7 @@ const MAX_LINES = 15;
 
 const toRow = (r: Record<string, unknown>): QuoteRow => ({
   ...(r as unknown as QuoteRow), delivery_fee_ngn: Number(r.delivery_fee_ngn), total_ngn: Number(r.total_ngn), quote_no: Number(r.quote_no),
-  lines: (r.lines as QuoteLine[]).map((l) => ({ item: l.item, qty: Number(l.qty), unit: Number(l.unit) })),
+  lines: (r.lines as QuoteLine[]).map((l) => ({ item: l.item, qty: Number(l.qty), unit: Number(l.unit), ...(l.detail ? { detail: l.detail } : {}) })),
 });
 
 async function findQuote(businessId: string, ref: { no?: number; id?: string }): Promise<QuoteRow | null> {
@@ -41,7 +41,7 @@ async function findQuote(businessId: string, ref: { no?: number; id?: string }):
 /** Builds the PDF, stores it, and returns the signed link. Used on create and on extend (a new date = a new PDF, same number). */
 async function pdfFor(actor: Actor, q: QuoteRow): Promise<{ url: string; filename: string }> {
   const plan = PLANS[actor.business.subscription_tier];
-  const lines = q.lines.map((l) => ({ item: l.item, qty: l.qty, unit: l.unit, amount: lineTotal(l) }));
+  const lines = q.lines.map((l) => ({ item: l.item, detail: l.detail ?? null, qty: l.qty, unit: l.unit, amount: lineTotal(l) }));
   const pdf = await quotePdf({
     businessName: actor.business.name, rcNumber: actor.business.rc_number, logo: await loadLogo(actor.business),
     quoteLabel: quoteLabel(q.quote_no), dateWat: dateLabel(watDateKey()), customerName: q.customer_name, lines,
@@ -72,7 +72,7 @@ function quoteMessage(actor: Actor, q: QuoteRow, doc: { url: string; filename: s
 
 export async function createQuote(actor: Actor, req: QuoteRequest): Promise<Reply> {
   const lines: QuoteLine[] = req.lines.filter((l) => l.item_name?.trim() && l.quantity > 0 && l.unit_price_ngn >= 0).slice(0, MAX_LINES)
-    .map((l) => ({ item: l.item_name.trim().slice(0, 60), qty: l.quantity, unit: Math.round(l.unit_price_ngn) }));
+    .map((l) => ({ item: l.item_name.trim().slice(0, 60), qty: l.quantity, unit: Math.round(l.unit_price_ngn), ...(cleanDetail(l.item_detail) ? { detail: cleanDetail(l.item_detail) } : {}) }));
   if (!lines.length) return reply(actor.phone).text('I need the items and prices for a quote, like: _quote for Mama Tunde: 2 lace 50k each and 1 gele 5k, valid 3 days_');
   const delivery = Math.max(0, Math.round(req.delivery_fee_ngn ?? 0));
   const total = quoteTotal(lines, delivery);
@@ -137,7 +137,7 @@ export async function quotePaid(actor: Actor, ref: { no?: number; id?: string },
 
   try {
     const drafts: TxnDraft[] = q.lines.map((l) => ({
-      tx_type: 'sale', description: `${l.qty} × ${l.item}`, category: 'Sales', quantity: l.qty, unit_price_ngn: l.unit, total_amount_ngn: lineTotal(l),
+      tx_type: 'sale', description: `${l.qty} × ${l.item}${l.detail ? ` (${l.detail})` : ''}`, category: 'Sales', quantity: l.qty, unit_price_ngn: l.unit, total_amount_ngn: lineTotal(l),
       amount_paid_ngn: lineTotal(l), payment_method: method, item_name: l.item, customer_name: q.customer_name,
     }));
     if (q.delivery_fee_ngn > 0) drafts.push({

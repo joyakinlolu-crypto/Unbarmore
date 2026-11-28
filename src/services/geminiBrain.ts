@@ -19,6 +19,7 @@ export const TxnLineSchema = z.object({
     'sale = sold goods/services; expense = running cost (fuel, rent, transport, data, salary); restock = bought inventory to resell; debt_repayment = a customer paying an old balance',
   ),
   item_name: z.string().optional().describe('Product/service in singular, title case, e.g. "Lace Fabric". Omit for expenses and debt repayments.'),
+  item_detail: z.string().max(80).optional().describe('Extra words the owner said about THIS item that a customer would want on a receipt: colour, size, material, brand, model, or a note ("blue", "size 14", "Swiss voile, 5 yards", "with free gele"). item_name stays the plain product. Omit when the owner said nothing extra. Never put the price, quantity or customer here.'),
   quantity: z.number().positive().describe('Units. Default 1.'),
   unit_price_ngn: Naira.optional(),
   amount_ngn: Naira.describe('Total value of this line (quantity × unit price).'),
@@ -83,7 +84,7 @@ export const BrainSchema = z.object({
     .optional(),
   quote: z.object({
     customer_name: z.string().optional(),
-    lines: z.array(z.object({ item_name: z.string(), quantity: z.number().positive(), unit_price_ngn: Naira })).min(1),
+    lines: z.array(z.object({ item_name: z.string(), item_detail: z.string().max(80).optional().describe('Colour, size, material or a note about this item, if the owner gave one.'), quantity: z.number().positive(), unit_price_ngn: Naira })).min(1),
     valid_days: z.number().int().min(1).max(90).optional().describe('How many days the price is held, only if the owner said ("valid 3 days", "for one week" = 7).'),
     delivery_fee_ngn: Naira.optional(),
     note: z.string().max(160).optional(),

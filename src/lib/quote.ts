@@ -6,7 +6,10 @@ import { ngn } from './money.js';
  *  - free plans get a quote with no expiry; Starter/Growth/trial get a validity window ("price held for 3 days")
  *  - inflation is why the window exists: a Nigerian price quoted today may be wrong next week
  */
-export interface QuoteLine { item: string; qty: number; unit: number }
+export interface QuoteLine { item: string; qty: number; unit: number; /** colour, size, note */ detail?: string }
+
+/** Colour / size / note for one line: trimmed, no brackets (they delimit it), short enough for a receipt. '' when empty. */
+export const cleanDetail = (d: string | undefined | null): string => (d ?? '').replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
 
 export const DEFAULT_VALID_DAYS = 3;
 export const MAX_VALID_DAYS = 90;
@@ -69,7 +72,7 @@ export function parsePayDetailsCommand(text: string): { text: string } | 'show' 
 export function quoteSummaryLines(no: number, customer: string | null, lines: QuoteLine[], delivery: number, total: number): string[] {
   return [
     `📄 *${quoteLabel(no)}*${customer ? ` for *${customer}*` : ''}`,
-    ...lines.map((l) => `• ${l.qty} × ${l.item}: ${ngn(lineTotal(l))}`),
+    ...lines.map((l) => `• ${l.qty} × ${l.item}${l.detail ? ` (${l.detail})` : ''}: ${ngn(lineTotal(l))}`),
     delivery > 0 ? `• Delivery: ${ngn(delivery)}` : '',
     `*Total ${ngn(total)}*`,
   ].filter(Boolean);

@@ -30,6 +30,12 @@ function monogram(name: string): string {
   return (words.length === 1 ? words[0]!.slice(0, 2) : words[0]![0]! + words[1]![0]!).toUpperCase();
 }
 
+/** "2 × Lace (blue, size 14)" → { name: 'Lace', detail: 'blue, size 14' }. The quantity has its own column, so the "2 ×" is dropped. */
+export function splitItem(description: string): { name: string; detail: string | null } {
+  const m = description.match(/^\s*(?:\d+(?:\.\d+)?\s*[×x]\s*)?(.*?)\s*(?:\(([^()]{1,80})\))?\s*$/i);
+  return { name: (m?.[1] || description).trim(), detail: m?.[2]?.trim() || null };
+}
+
 /** Brand block: the owner's logo, or (no logo) a green monogram badge. Always followed by the business name. */
 function header(doc: PDFKit.PDFDocument, title: string, businessName: string, rcNumber: string | null, logo?: Buffer | null) {
   const w = doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -112,10 +118,11 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
     doc.moveDown();
 
     const cols = [x, x + w * 0.5, x + w * 0.62, x + w * 0.8];
-    const row = (cells: string[], font: 'reg' | 'bold', color = BRAND.ink) => {
+    const row = (cells: string[], font: 'reg' | 'bold', color = BRAND.ink, detail?: string | null) => {
       const y = doc.y;
       doc.font(font).fontSize(9).fillColor(color);
       doc.text(cells[0]!, cols[0], y, { width: w * 0.48 });
+      if (detail) { doc.font('reg').fontSize(7.5).fillColor(BRAND.muted).text(detail, cols[0], doc.y, { width: w * 0.48 }); doc.font(font).fontSize(9).fillColor(color); }
       const h = doc.y - y;
       doc.text(cells[1]!, cols[1], y, { width: w * 0.1, align: 'right' });
       doc.text(cells[2]!, cols[2], y, { width: w * 0.16, align: 'right' });
@@ -124,7 +131,7 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
       doc.x = x;
     };
     row(['Item', 'Qty', 'Unit', 'Amount'], 'bold', BRAND.muted);
-    for (const l of r.lines) row([l.description, String(l.quantity), l.unitPrice ? ngn(l.unitPrice) : '—', ngn(l.amount)], 'reg');
+    for (const l of r.lines) { const it = splitItem(l.description); row([it.name, String(l.quantity), l.unitPrice ? ngn(l.unitPrice) : '—', ngn(l.amount)], 'reg', BRAND.ink, it.detail); }
 
     const total = r.lines.reduce((s, l) => s + l.amount, 0);
     const balance = Math.max(0, total - r.amountPaid);
@@ -169,7 +176,7 @@ export function receiptPdf(r: ReceiptInput): Promise<Buffer> {
 export interface QuoteInput {
   businessName: string; rcNumber: string | null; logo?: Buffer | null;
   quoteLabel: string; dateWat: string; customerName: string | null;
-  lines: { item: string; qty: number; unit: number; amount: number }[];
+  lines: { item: string; detail?: string | null; qty: number; unit: number; amount: number }[];
   deliveryFee: number; total: number;
   /** "Thu 4 Dec". Omitted on plans without a validity window. */
   validUntilLabel?: string | null;
@@ -192,10 +199,11 @@ export function quotePdf(q: QuoteInput): Promise<Buffer> {
     doc.moveDown();
 
     const cols = [x, x + w * 0.5, x + w * 0.62, x + w * 0.8];
-    const row = (cells: string[], font: 'reg' | 'bold', color = BRAND.ink) => {
+    const row = (cells: string[], font: 'reg' | 'bold', color = BRAND.ink, detail?: string | null) => {
       const y = doc.y;
       doc.font(font).fontSize(9).fillColor(color);
       doc.text(cells[0]!, cols[0], y, { width: w * 0.48 });
+      if (detail) { doc.font('reg').fontSize(7.5).fillColor(BRAND.muted).text(detail, cols[0], doc.y, { width: w * 0.48 }); doc.font(font).fontSize(9).fillColor(color); }
       const h = doc.y - y;
       doc.text(cells[1]!, cols[1], y, { width: w * 0.1, align: 'right' });
       doc.text(cells[2]!, cols[2], y, { width: w * 0.16, align: 'right' });
@@ -204,7 +212,7 @@ export function quotePdf(q: QuoteInput): Promise<Buffer> {
       doc.x = x;
     };
     row(['Item', 'Qty', 'Unit', 'Amount'], 'bold', BRAND.muted);
-    for (const l of q.lines) row([l.item, String(l.qty), ngn(l.unit), ngn(l.amount)], 'reg');
+    for (const l of q.lines) row([l.item, String(l.qty), ngn(l.unit), ngn(l.amount)], 'reg', BRAND.ink, l.detail);
     if (q.deliveryFee > 0) row(['Delivery', '1', ngn(q.deliveryFee), ngn(q.deliveryFee)], 'reg');
 
     doc.moveTo(x, doc.y).lineTo(x + w, doc.y).strokeColor(BRAND.line).stroke();

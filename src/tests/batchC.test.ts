@@ -337,3 +337,39 @@ describe('migration 011 matches what the code expects', () => {
     expect(sql).toMatch(/ON DELETE CASCADE/);
   });
 });
+
+describe('descriptions on receipts and quotes (colour, size, notes)', () => {
+  it('a sale line keeps what the owner said about the item; brackets and junk are cleaned', async () => {
+    const { linesToDrafts } = await vi.importActual<typeof import('../flows/ledger.js')>('../flows/ledger.js');
+    const mk = (item_detail?: string) => ({ type: 'sale' as const, item_name: 'Lace', item_detail, quantity: 2, unit_price_ngn: 50_000, amount_ngn: 100_000, amount_paid_ngn: 100_000, payment_method: 'cash' as const });
+    expect(linesToDrafts([mk('blue Swiss voile, 5 yards')])[0]!.description).toBe('2 × Lace (blue Swiss voile, 5 yards)');
+    expect(linesToDrafts([mk()])[0]!.description).toBe('2 × Lace');
+    expect(linesToDrafts([mk('   ')])[0]!.description).toBe('2 × Lace');
+    expect(linesToDrafts([mk('(blue) (x)')])[0]!.description).toBe('2 × Lace (blue x)');                 // brackets removed: they delimit the detail
+    expect(linesToDrafts([mk('a'.repeat(200))])[0]!.description.length).toBeLessThanOrEqual('2 × Lace ()'.length + 60);
+  });
+  it('splitItem separates the item from its detail and drops the "2 ×" (quantity has its own column)', async () => {
+    const { splitItem } = await import('../services/pdfGenerator.js');
+    expect(splitItem('2 × Lace (blue, size 14)')).toEqual({ name: 'Lace', detail: 'blue, size 14' });
+    expect(splitItem('3 × Ankara Gown')).toEqual({ name: 'Ankara Gown', detail: null });
+    expect(splitItem('1.5 x Rice (50kg bag)')).toEqual({ name: 'Rice', detail: '50kg bag' });
+    expect(splitItem('Delivery')).toEqual({ name: 'Delivery', detail: null });
+    expect(splitItem('Payment towards your balance')).toEqual({ name: 'Payment towards your balance', detail: null });
+  });
+  const hasPdftotext = (() => { try { execFileSync('pdftotext', ['-v'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+  it.skipIf(!hasPdftotext)('the receipt PDF shows the description under the item, once, and the quantity only in its column', async () => {
+    const { receiptPdf } = await import('../services/pdfGenerator.js');
+    const pdf = await receiptPdf({ businessName: 'Ada Fabrics', rcNumber: null, receiptNumber: 'R1', dateWat: '28 Nov 2026', customerName: 'Mama Tunde', lines: [{ description: '2 × Lace (blue Swiss voile, 5 yards)', quantity: 2, unitPrice: 50_000, amount: 100_000 }, { description: '1 × Gele', quantity: 1, unitPrice: 5_000, amount: 5_000 }], amountPaid: 105_000, paymentMethod: 'cash' });
+    fs.writeFileSync('/tmp/r-detail.pdf', pdf); const t = execFileSync('pdftotext', ['-layout', '/tmp/r-detail.pdf', '-'], { encoding: 'utf8' });
+    expect(t).toContain('Lace'); expect(t).toContain('blue Swiss voile, 5 yards'); expect(t).toContain('Gele');
+    expect(t).not.toContain('2 × Lace'); expect(t).not.toContain('1 × Gele');           // the old, duplicated "2 × " form
+    expect(t.match(/Gele/g)!.length).toBe(1);
+  });
+  it('quotes carry the description too: on the PDF, in the summary, and into the sale when marked paid', async () => {
+    const r = await createQuote(actor(), { customer_name: 'Mama Tunde', lines: [{ item_name: 'Lace', item_detail: 'blue, 5 yards', quantity: 2, unit_price_ngn: 50_000 }] });
+    expect(m.quotes[0]!.lines[0]).toMatchObject({ item: 'Lace', detail: 'blue, 5 yards' });
+    expect(body(r)).toContain('2 × Lace (blue, 5 yards)');
+    await quotePaid(actor(), { no: 1 }, 'cash');
+    expect(m.batches[0]![0].description).toBe('2 × Lace (blue, 5 yards)');
+  });
+});

@@ -8,6 +8,7 @@ import type { BankAlert, TxnLine } from '../services/geminiBrain.js';
 import { appendLedgerRows } from '../services/googleSheets.js';
 import { reply, type Reply } from '../services/whatsapp.js';
 import { ngn, ngnShort } from '../lib/money.js';
+import { cleanDetail } from '../lib/quote.js';
 import { todayLine } from './insights.js';
 import { moneyBack, moneyBackLine } from './moneyBack.js';
 import { creditWarning } from './creditWarning.js';
@@ -33,7 +34,7 @@ export function linesToDrafts(lines: TxnLine[]): TxnDraft[] {
     const desc =
       l.type === 'expense' ? (l.category ?? 'Expense')
       : l.type === 'debt_repayment' ? `Debt repayment${l.customer_name ? ` — ${l.customer_name}` : ''}`
-      : `${l.quantity} × ${l.item_name ?? 'item'}`;
+      : `${l.quantity} × ${l.item_name ?? 'item'}${cleanDetail(l.item_detail) ? ` (${cleanDetail(l.item_detail)})` : ''}`;
     return {
       tx_type: l.type,
       description: desc,
