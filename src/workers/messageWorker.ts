@@ -231,7 +231,7 @@ async function onboarding(msg: WaInboundMessage, session: Session, profileName: 
     await setSession(phone, 'ONBOARDING_NAME', { referral_code: code });
     return reply(phone).text(
       `👋 Welcome to *Unbarmore*${profileName ? `, ${profileName.split(' ')[0]}` : ''}!`,
-      'I help shop owners *get paid faster, see their real profit and sell more*, all inside WhatsApp. No forms, no app to learn.',
+      'I remember what is easy to forget in your business: *who owes you, what is running low, who to follow up*. So you stop losing money. All inside WhatsApp, no app to learn.',
       '',
       code ? '🎁 Your friend\'s referral is saved.' : '',
       '*What is your business name?* (the short name your customers know)',
@@ -287,29 +287,47 @@ async function referralAnswer(actor: Actor, text: string): Promise<Reply> {
 
 const dashLine = (link: string | null) => link ? `📲 *Your dashboard:* ${link}` : '📲 Type *DASHBOARD* any time for your charts.';
 
-/** Last onboarding message: ONE question that decides what we show them first. */
+/** Last onboarding message: ONE question that decides what we help them remember first. */
 function welcomeDone(phone: string, name: string, referredBy: string | null): Reply {
   return reply(phone)
     .text(
       `🎉 You're in, *${name}*! ${referredBy ? `*${referredBy}* will be thanked for sending you. ` : ''}Your ${TRIAL_DAYS}-day free trial has started.`,
       '',
-      '*What hurts most in your business right now?* Pick one and I\'ll start there.',
+      '*What do you forget most in your business?* Pick one and I\'ll start helping you remember it. Not sure? Just tell me your last sale.',
     )
-    .button('PAIN_OWE', '💸 Customers owe me')
-    .button('PAIN_PROFIT', '📊 Know my profit')
-    .button('PAIN_START', '🚀 Not sure, start');
+    .button('PAIN_OWE', '💸 Who owes me')
+    .button('PAIN_STOCK', '📦 Stock & prices')
+    .button('PAIN_FOLLOW', '📞 Who to follow up');
 }
 
-/** The 60-second win for each pain. One action, one example they can copy. */
-async function painReply(actor: Actor, kind: 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_START'): Promise<Reply> {
+export type PainKind = 'PAIN_OWE' | 'PAIN_STOCK' | 'PAIN_FOLLOW' | 'PAIN_PROFIT' | 'PAIN_START';
+
+/** The first small win for each thing owners forget. One action, one example they can copy: and only what the app really does. */
+async function painReply(actor: Actor, kind: PainKind): Promise<Reply> {
   const link = await createOwnerMagicLink(actor.business.id).catch(() => null); // never let a link problem block this
   const body = kind === 'PAIN_OWE'
     ? [
-        '💸 *Let\'s get your money back.*',
+        '💸 *Let\'s make sure you never forget who owes you.*',
         'Tell me who owes you. Type or send a voice note:',
         '_Femi owes me 14k, Kalu 28k, Mama Tunde 9k_',
         '',
         'Then say *CHASE*. I write a polite reminder for each person and you send it with one tap. When someone promises a day, say _Femi will pay Friday_ and I\'ll remind you that morning.',
+      ]
+    : kind === 'PAIN_STOCK'
+    ? [
+        '📦 *Let\'s make sure you never run out, and never sell too cheap.*',
+        'Tell me what you have, what it cost you and what you sell it for:',
+        '_I have 50 lace, cost 15k, selling 20k_',
+        '',
+        'When you buy more at a new price, say _bought 10 lace 17k each_. I\'ll warn you when an item is about to finish, and when a price rise means your selling price is now too low.',
+      ]
+    : kind === 'PAIN_FOLLOW'
+    ? [
+        '📞 *Let\'s make sure you never forget who to follow up.*',
+        'Name the customer when you tell me a sale:',
+        '_sold 2 lace 50k to Mama Tunde_',
+        '',
+        'Every morning I\'ll tell you which customers have gone quiet and who to call. Send *WIN BACK* any time and I\'ll write the messages for you. Sent someone an invoice? I\'ll remind you before it expires.',
       ]
     : kind === 'PAIN_PROFIT'
     ? [
@@ -317,7 +335,7 @@ async function painReply(actor: Actor, kind: 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_
         'Send your last sale, the way you\'d tell a friend:',
         '_sold 2 bags rice 30k cash_',
         '',
-        'Then tell me what it cost you: _rice costs me 22k_. I\'ll show your real profit after cost, not just money in.',
+        'Then tell me what it cost you: _rice costs me 22k_. I\'ll show what you really made after cost, not just money in.',
       ]
     : [
         '🚀 *Easiest start:* tell me your last sale, the way you\'d tell a friend. Type or send a voice note:',
@@ -329,7 +347,7 @@ async function painReply(actor: Actor, kind: 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_
     ...body,
     '',
     dashLine(link),
-    '⏰ Every morning at *7 AM* I\'ll tell you who to chase and who to call back. Reply *REMINDERS OFF* to pause.',
+    '⏰ Every morning at *7 AM* I\'ll remind you who to chase and who to call back. Reply *REMINDERS OFF* to pause.',
     'Type *START* to see your progress, or *REFER* to earn cash for every shop you bring.',
   );
 }
@@ -665,7 +683,7 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
       await setSession(actor.phone, 'IDLE', {});
       return welcomeDone(actor.phone, actor.business.name, ref?.name ?? null);
     }
-    case 'PAIN_OWE': case 'PAIN_PROFIT': case 'PAIN_START': return painReply(actor, kind as 'PAIN_OWE' | 'PAIN_PROFIT' | 'PAIN_START');
+    case 'PAIN_OWE': case 'PAIN_STOCK': case 'PAIN_FOLLOW': case 'PAIN_PROFIT': case 'PAIN_START': return painReply(actor, kind as PainKind);
     case 'BTN_CHASE_DEBT': return chaseDebtsReply(actor);
     case 'WINBACK': return customerMessagesReply(actor, 'winback');
     case 'DASHLINK': return dashboardReply(actor);

@@ -169,13 +169,13 @@ try {
 
   r = await ask('skip', () => button('ONB_SKIP'), (v) => /You.re in/i.test(v.text) && v.buttons.some((b) => b.id === 'PAIN_OWE'));
   const welcomeText = r.reply?.text ?? '';
-  ok('tap Skip → ONE short welcome that asks "What hurts most?" with 3 pain buttons', !!r.reply && real(r.all).length === 1 && /What hurts most/i.test(welcomeText) && r.reply.buttons.map((b) => b.id).join() === 'PAIN_OWE,PAIN_PROFIT,PAIN_START' && welcomeText.length < 400, `${welcomeText.length} chars: ${welcomeText.replace(/\n/g, ' | ').slice(0, 160)}`);
+  ok('tap Skip → ONE short welcome that asks "What do you forget most?" with 3 buttons (who owes me / stock & prices / who to follow up)', !!r.reply && real(r.all).length === 1 && /What do you forget most/i.test(welcomeText) && r.reply.buttons.map((b) => b.id).join() === 'PAIN_OWE,PAIN_STOCK,PAIN_FOLLOW' && welcomeText.length < 400, `${welcomeText.length} chars: ${welcomeText.replace(/\n/g, ' | ').slice(0, 160)}`);
   ok('the welcome does not sound like bookkeeping', !/\b(bookkeeping|books|ledger|records?|track)\b/i.test(welcomeText));
 
   const pains: [string, RegExp, RegExp][] = [
-    ['PAIN_OWE', /get your money back/i, /CHASE/],
-    ['PAIN_PROFIT', /what you really make/i, /costs me 22k/],
-    ['PAIN_START', /Easiest start/i, /product photos/],
+    ['PAIN_OWE', /never forget who owes you/i, /CHASE/],
+    ['PAIN_STOCK', /never run out/i, /bought 10 lace/],
+    ['PAIN_FOLLOW', /never forget who to follow up/i, /WIN BACK/],
   ];
   for (const [id, head, tip] of pains) {
     r = await ask(id, () => button(id), (v) => head.test(v.text));
