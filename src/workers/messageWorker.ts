@@ -1,3 +1,5 @@
+import { helpFromText, helpPicker, helpTopicReply } from '../flows/help.js';
+import { parseHelpCommand } from '../lib/help.js';
 import { calendarReply } from '../flows/calendar.js';
 import { parseCalendarCommand } from '../lib/calendar.js';
 import { recordVideoResult } from '../flows/videoResults.js';
@@ -502,7 +504,9 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (promise) { const rep = await recordPromise(actor, promise.name, promise.date); if (rep) return rep; }
   if (upper === 'PROMO') return deadStockPromoReply(actor);
   if (upper === 'STATEMENT') return statementReply(actor);
-  if (['MENU', 'HELP', '?'].includes(upper)) return helpMenu(actor);
+  const helpCmd = parseHelpCommand(t);
+  if (helpCmd) return helpFromText(actor, helpCmd.text);
+  if (['MENU', '?'].includes(upper)) return helpMenu(actor);
   if (upper === 'I HAVE PAID') return reply(actor.phone).text(`Thanks! Your plan: *${b.subscription_tier}*. If you just paid, it updates within a minute.`);
 
   if (['WITHDRAW', 'CASH OUT', 'CASHOUT', 'PAYOUT'].includes(upper)) return withdrawStart(actor);
@@ -593,7 +597,7 @@ function helpMenu(actor: Actor): Reply {
     '📊 DASHBOARD — charts + unlimited AI advisor on the web',
     '📄 Say "invoice for Mama Tunde, 2 lace 50k each" for a branded invoice · INVOICES · INV-014 PAID · MY ACCOUNT (bank details) · MY ADDRESS (shown on receipts and invoices)',
     '🖼️ FLYER — free "Available now" picture for your Status · MAKE LOGO — a free logo',
-    '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 SUPPORT',
+    '🧾 RECEIPT — receipt for your last sale · 🏪 CLOSE — end-of-day cash check · 💵 COUNT 85000 — tell me what is in your drawer and I\'ll catch missing money · 💼 SET ASIDE — your evening profit split · 🆘 HELP (stuck? pick your problem)',
     'Commands: UNDO · CHASE · PROMO · STATEMENT · THEME · REFER · PLANS · RC 1234567',
   );
 }
@@ -656,6 +660,10 @@ async function onButton(actor: Actor, id: string, session: Session): Promise<Rep
     case 'QPM': return quotePaid(actor, { id: a }, (['cash', 'transfer', 'pos'] as const).find((m) => m === b2) ?? null, c2 && /^\d+$/.test(c2) ? Number(c2) : null);
     case 'QEXT': return quoteExtend(actor, { id: a }, 3);
     case 'QCAN': return quoteCancel(actor, { id: a });
+    case 'HELP':
+      if (a === 'ok') return reply(actor.phone).text('🙌 Glad that helped. Send *HELP* any time you are stuck.');
+      if (a === 'more' || !a) return helpPicker(actor.phone);
+      return helpTopicReply(actor, a);
     case 'VRES': return recordVideoResult(actor, a, b2);
     case 'MSA': return acceptMarginShield(actor, a!, Number(b2));
     case 'MSK': return reply(actor.phone).text('👍 Price unchanged. I\'ll keep watching your costs.');

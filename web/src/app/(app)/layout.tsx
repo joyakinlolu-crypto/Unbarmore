@@ -1,6 +1,7 @@
 import InstallBanner from '@/components/InstallBanner';
 import Nav from '@/components/Nav';
 import { requireSession } from '@/lib/auth';
+import { botNumber } from '@/lib/whatsapp';
 import { exitViewAs } from '@/app/admin/(console)/actions';
 
 const TIER: Record<string, { label: string; cls: string }> = {
@@ -24,7 +25,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       )}
       <header className="sticky top-0 z-10 flex items-center justify-between bg-royal px-4 py-3 pt-[max(env(safe-area-inset-top),0.75rem)] text-white">
         <span className="truncate font-semibold">{business.name}</span>
-        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${t.cls}`}>{t.label}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          <a href={`https://wa.me/${botNumber()}?text=${encodeURIComponent('HELP')}`} target="_blank" rel="noopener"
+            className="rounded-full bg-white/15 px-3 py-0.5 text-xs font-semibold text-white" aria-label="Get help on WhatsApp">Help</a>
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${t.cls}`}>{t.label}</span>
+        </span>
       </header>
       <InstallBanner />
       {children}
