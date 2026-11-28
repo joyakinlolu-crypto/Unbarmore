@@ -7,7 +7,7 @@ const TABS = [
   { href: '/dashboard', label: 'Overview', Icon: LayoutDashboard },
   { href: '/charts', label: 'Charts', Icon: BarChart3 },
   { href: '/advisor', label: 'Advisor', Icon: MessageCircle },
-  { href: '/ledger', label: 'Ledger', Icon: BookOpen },
+  { href: '/ledger', label: 'Money', Icon: BookOpen },
   { href: '/settings', label: 'Settings', Icon: Settings },
 ];
 

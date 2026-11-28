@@ -401,7 +401,7 @@ async function dashboardReply(actor: Actor): Promise<Reply> {
   const link = await createOwnerMagicLink(actor.business.id);
   if (!link) return reply(actor.phone).text('You asked for several links just now. Please wait a few minutes and try again.');
   return reply(actor.phone).text(
-    '📊 *Your dashboard, advisor chat and ledger:*', link, '',
+    '📊 *Your dashboard and business advisor:*', link, '',
     'One tap, no password. Link works once and expires in 15 minutes. Add it to your Home Screen to open it like an app.',
   );
 }
@@ -781,7 +781,7 @@ async function runBrain(
     case 'OFF_TOPIC':
     default:
       return reply(actor.phone).text(
-        brain.reply_text ?? 'I only help with your business — sales videos, bookkeeping, receipts and closing customers. 🙏',
+        brain.reply_text ?? 'I only help with your business: getting customers, getting paid and closing sales. 🙏',
       );
   }
 }
@@ -898,7 +898,7 @@ export function startMessageWorkers() {
       // Our AI account is out of credit / the key is rejected: the owner already got ONE clear Gemini alert. Don't add a second, noisy one,
       // and tell the customer the truth instead of "try again in a minute" (a minute will not fix it). Once per 30 min per person.
       void redis.set(`outage_note:${job.data.msg.from}`, '1', 'EX', 1800, 'NX').then((fresh) => {
-        if (fresh) void reply(job.data.msg.from).text('⚠️ Unbarmore is paused for a short while because of a technical problem on our side. Your records are safe. Please try again in a little while.').send().catch(() => undefined);
+        if (fresh) void reply(job.data.msg.from).text('⚠️ Unbarmore is paused for a short while because of a technical problem on our side. Your information is safe. Please try again in a little while.').send().catch(() => undefined);
       });
     } else {
       void alertAdmin('worker', `Could not process a customer message (…${job.data.msg.from.slice(-4)}, type ${job.data.msg.type})`, String((err as Error)?.message ?? err), { key: String((err as Error)?.message ?? err).slice(0, 60), cooldownS: 900 });

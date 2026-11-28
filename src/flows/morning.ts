@@ -104,7 +104,7 @@ export function composeMorning(f: MorningFacts): MorningMessage {
   else if (quiet[0]) focus = `👉 *Message ${quiet[0].name} today.* A past customer is the cheapest sale you can make.`;
   else if (ro) focus = runOutFocus(ro);
   else if (low[0]) focus = `👉 Restock *${low[0].name}* before you miss a sale.`;
-  else if (!f.yesterday || f.yesterday.count === 0) focus = '👉 Send me yesterday\'s sales and expenses in one voice note so your books stay right.';
+  else if (!f.yesterday || f.yesterday.count === 0) focus = '👉 Send me yesterday\'s sales and spending in one voice note and I\'ll tell you what you really made.';
   else focus = '👉 Have a great day! Send a voice note when the first sale or expense happens.';
   lines.push('', focus);
   const target = urgent ?? (debts[0] && debts[0].late === null ? debts[0] : undefined);

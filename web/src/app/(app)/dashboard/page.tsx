@@ -67,7 +67,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {steps.length > 0 && stepsDone < steps.length && (
         <section className="rounded-3xl border border-royal/20 bg-blue-50 p-4" aria-label="Getting started">
           <h2 className="font-semibold text-royal">Getting started: {stepsDone} of {steps.length} done</h2>
-          <p className="mt-0.5 text-sm text-slate-600">Unbarmore works like this: you talk to it on WhatsApp, it keeps your books, and this app shows you the result. Do these in order:</p>
+          <p className="mt-0.5 text-sm text-slate-600">Unbarmore works like this: you talk to it on WhatsApp, it chases your money and sells for you, and this app shows you the result. Do these in order:</p>
           <ol className="mt-3 space-y-2">
             {steps.map((x) => (
               <li key={x.id} className="flex items-start gap-2 text-sm">

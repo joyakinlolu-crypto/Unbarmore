@@ -5,7 +5,7 @@ import { ngn, waLink, waNumber, watDate } from '@/lib/format';
 import { db } from '@/lib/supabase';
 import { botNumber } from '@/lib/whatsapp';
 
-export const metadata = { title: 'Ledger' };
+export const metadata = { title: 'Money' };
 export const dynamic = 'force-dynamic';
 
 const PAGE = 25;
