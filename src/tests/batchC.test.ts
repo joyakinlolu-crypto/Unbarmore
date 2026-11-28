@@ -323,7 +323,7 @@ describe('quote PDF', () => {
       fs.writeFileSync('/tmp/q-test.pdf', pdf); return execFileSync('pdftotext', ['/tmp/q-test.pdf', '-'], { encoding: 'utf8' });
     };
     const paid = await mk({ validUntilLabel: 'Mon 30 Nov', payDetails: 'GTBank 0123456789 Ada Fabrics', promo: { botNumber: '2348000000000', referralCode: 'UNBAR-ABCD', businessName: 'Ada Fabrics' } });
-    for (const s of ['QUOTATION', 'Q-014', 'Mama Tunde', 'Price valid until: Mon 30 Nov', 'PAY TO', 'GTBank 0123456789 Ada Fabrics', '₦102,000', 'Delivery', 'Ada Fabrics sent you']) expect(paid).toContain(s);
+    for (const s of ['QUOTATION', 'Q-014', 'Mama Tunde', 'Price valid until: Mon 30 Nov', 'PAY TO', 'GTBank 0123456789 Ada Fabrics', '₦102,000', 'Delivery', 'referred by Ada Fabrics']) expect(paid).toContain(s);
     const free = await mk({});
     expect(free).not.toContain('valid until'); expect(free).not.toContain('PAY TO');
   });

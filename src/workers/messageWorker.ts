@@ -483,14 +483,14 @@ async function onCommand(actor: Actor, raw: string, session: Session): Promise<R
   if (['USE CREDIT', 'USE MY CREDIT', 'CREDIT'].includes(upper) && !actor.isStaff) return setRenewalCredit(actor, true);
   if (['KEEP CASH', 'CASH', 'KEEP MY CASH'].includes(upper) && !actor.isStaff) return setRenewalCredit(actor, false);
   if (['REFER', 'WALLET', 'REFERRAL'].includes(upper)) {
-    const link = `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent(`Hi Unbarmore, ${b.name} sent me (${b.referral_code})`)}`;
+    const link = `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent(`Hi Unbarmore, I was referred by ${b.name} (${b.referral_code})`)}`;
     const wallet = Number(b.referral_wallet_ngn);
     const pend = await pendingPayout(b.id);
     const r = reply(actor.phone).text(
       `🎁 Wallet: *${ngn(wallet)}*`,
       '',
       `• Every shop you bring that subscribes pays *you* cash: *${ngn(REFERRAL.REWARD_BY_TIER.starter_5k)}* for Starter, *${ngn(REFERRAL.REWARD_BY_TIER.growth_15k)}* for Growth.`,
-      `• They only need to say *${b.name}* sent them when they join (or use your code *${b.referral_code}*).`,
+      `• They only need to say they were referred by *${b.name}* when they join (or use your code *${b.referral_code}*).`,
       `• Cash out from ${ngn(REFERRAL.WITHDRAW_MIN_NGN)}: type *WITHDRAW*. Or send *USE CREDIT* to take it off your own renewal instead.`,
       pend ? `\n⏳ Payout pending: ${ngn(pend.amountNgn)} → ${pend.bankName ?? 'bank'} ${maskAccount(pend.accountNumber)}${pend.ref ? ` (${pend.ref})` : ''}` : '',
       '', 'Forward this to other shop owners 👇', link,

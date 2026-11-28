@@ -452,7 +452,7 @@ try {
     r = await ask('withdraw-locked', () => text('WITHDRAW'), (v) => /starts at/i.test(v.text));
     ok('WITHDRAW with ₦500 → "starts at ₦1,000" (one shop you bring), what Starter/Growth pay, nothing started', !!r.reply && /₦1,000/.test(r.reply.text) && /₦3,000/.test(r.reply.text) && (await state()) === 'IDLE', r.reply?.text.replace(/\n/g, ' | '));
     r = await ask('refer-locked', () => text('REFER'), (v) => /Wallet/i.test(v.text));
-    ok('REFER at ₦500 explains the rules (₦1,000 Starter / ₦3,000 Growth, "X sent me", cash or USE CREDIT) and shows NO withdraw button', !!r.reply && /₦1,000/.test(r.reply.text) && /₦3,000/.test(r.reply.text) && /Ada Fabrics.*sent/.test(r.reply.text) && /USE CREDIT/.test(r.reply.text) && /wa\.me\/.*Ada%20Fabrics/.test(r.reply.text) && !r.reply.buttons.some((b) => b.id === 'WITHDRAW'), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
+    ok('REFER at ₦500 explains the rules (₦1,000 Starter / ₦3,000 Growth, "referred by X", cash or USE CREDIT) and shows NO withdraw button', !!r.reply && /₦1,000/.test(r.reply.text) && /₦3,000/.test(r.reply.text) && /referred by \*?Ada Fabrics/.test(r.reply.text) && /USE CREDIT/.test(r.reply.text) && /wa\.me\/.*Ada%20Fabrics/.test(r.reply.text) && !r.reply.buttons.some((b) => b.id === 'WITHDRAW'), r.reply?.text.replace(/\n/g, ' | ').slice(0, 200));
 
     await setWallet(1000);
     r = await ask('refer-unlocked', () => text('REFER'), (v) => v.buttons.some((b) => b.id === 'WITHDRAW'));

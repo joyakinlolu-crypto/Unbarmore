@@ -150,7 +150,7 @@ describe.skipIf(!hasPdftotext)('"Powered by Unbarmore" on customer receipts', ()
     const t = await text({ botNumber: '15551658238', referralCode: 'UNBAR-X87X', businessName: 'AsoEwa Fabrics' });
     expect(t).toContain('wa.me/15551658238');
     expect(t).toContain('UNBAR-X87X');
-    expect(t).toContain('AsoEwa Fabrics sent you');
+    expect(t).toContain('referred by AsoEwa Fabrics');
   });
   it('is absent when promo is off (no-watermark plan) but the receipt itself is intact', async () => {
     const t = await text(null);
