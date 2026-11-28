@@ -385,7 +385,7 @@ async function onState(actor: Actor, text: string, session: Session): Promise<Re
         parts: [{ text }],
       });
       if (!d.product_name || !d.price_ngn) {
-        return reply(actor.phone).text('I need the *product name* and *price*. E.g. _"Ankara gown, 15k, delivery Lagos 2k"_');
+        return reply(actor.phone).text('I need the *product name* and *price*. E.g. _"Ankara gown, 15k, delivery 2k"_');
       }
       await setSession(actor.phone, 'IDLE', {});
       return startVideo(actor, {
@@ -849,7 +849,7 @@ async function askOrStartVideo(
     '2️⃣ Price (₦)',
     '3️⃣ Delivery info (optional)',
     '',
-    '_e.g. "Ankara gown, 15k, delivery Lagos 2k"_',
+    '_e.g. "Ankara gown, 15k, delivery 2k"_',
     '_Want a Yoruba or Pidgin voice? Just add the word, like "…, Yoruba"._',
   );
 }

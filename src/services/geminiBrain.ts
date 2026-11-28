@@ -214,7 +214,7 @@ export interface BrainInput {
 
 const ROUTER_SYSTEM = (b: BrainInput['business']) => `
 You are Unbarmore, the WhatsApp sales, video and profit co-pilot for "${b.name}", a Nigerian small business.
-Today in Lagos is ${b.todayWat}. Known products: ${b.recentProducts.slice(0, 40).join(', ') || 'none yet'}.
+Today (Nigerian time) is ${b.todayWat}. Never assume which city or state the business is in, and never name one unless the owner did: Unbarmore serves shops all over Nigeria. Known products: ${b.recentProducts.slice(0, 40).join(', ') || 'none yet'}.
 Customers who currently owe this business: ${b.owing?.length ? b.owing.slice(0, 30).join('; ') : 'none recorded yet'}.
 
 Classify the message into exactly one intent and fill ONLY that intent's field:
@@ -277,7 +277,7 @@ export async function readBankAlert(image: { data: Buffer; mimeType: string }, t
   return generateStructured({
     schema: BankAlertSchema,
     system:
-      `You are a forensic reader of Nigerian bank transfer screenshots (Opay, Moniepoint, Palmpay, Kuda, GTBank, Access, Zenith, UBA, First Bank, etc.) and supplier receipts. Extract fields exactly as printed. Scrutinise the amount and name regions for edit artifacts. Be conservative: list an anomaly only if you can point to it in the image itself. Today's date in Lagos is ${todayWat}: a date on or before today is NORMAL and must never be listed as an anomaly. Do not flag the session ID merely for its length or digits.`,
+      `You are a forensic reader of Nigerian bank transfer screenshots (Opay, Moniepoint, Palmpay, Kuda, GTBank, Access, Zenith, UBA, First Bank, etc.) and supplier receipts. Extract fields exactly as printed. Scrutinise the amount and name regions for edit artifacts. Be conservative: list an anomaly only if you can point to it in the image itself. Today's date in Nigeria is ${todayWat}: a date on or before today is NORMAL and must never be listed as an anomaly. Do not flag the session ID merely for its length or digits.`,
     parts: [{ inlineData: { mimeType: image.mimeType, data: image.data.toString('base64') } }, { text: 'Read this.' }],
     temperature: 0,
   });
@@ -310,9 +310,9 @@ export async function writeVideoScript(p: {
         ? `You write 8–10 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is ${MINI_VIDEO.words} words, no more: a 2-second hook, the product and price, then a closing call to action: "Message us on WhatsApp to order" (the phone number is shown on screen; never say any phone number, code or digits aloud). `
         : 'You write 15–18 second vertical video ads for Nigerian Instagram/WhatsApp Status sellers. The voiceover is 28–32 words, no more (the voice speaks about two words a second). Hook in the first 2 seconds, one concrete benefit, price, a nudge to act now, then a closing call to action: "Message us on WhatsApp to order" (the phone number is shown on screen; never say any phone number, code or digits aloud). ') +
       (voice === 'yoruba'
-        ? 'LANGUAGE: write the voiceover AND the 3 captions in Yoruba with correct tone marks and diacritics (ẹ, ọ, ṣ, à, á…), Lagos market-seller tone. Yoruba number words are easy to get wrong, so say the product name and the price in ENGLISH words inside the Yoruba sentence (e.g. "seventeen thousand five hundred naira"), never as digits and never in Yoruba number words. The call to action is the Yoruba for "Message us on WhatsApp to order". Set pidgin=false. '
+        ? 'LANGUAGE: write the voiceover AND the 3 captions in Yoruba with correct tone marks and diacritics (ẹ, ọ, ṣ, à, á…), Nigerian market-seller tone. Yoruba number words are easy to get wrong, so say the product name and the price in ENGLISH words inside the Yoruba sentence (e.g. "seventeen thousand five hundred naira"), never as digits and never in Yoruba number words. The call to action is the Yoruba for "Message us on WhatsApp to order". Set pidgin=false. '
         : '') +
-      'Never invent facts the owner did not give you: no customer counts ("500 happy customers"), no ratings, no "limited stock" or "few pieces left", no discounts, no delivery promises beyond the given delivery text. Natural Lagos tone. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
+      'Never invent facts the owner did not give you: no customer counts ("500 happy customers"), no ratings, no "limited stock" or "few pieces left", no discounts, no delivery promises beyond the given delivery text. Natural Nigerian tone. Do not name any city or state unless the owner gave one in the delivery text. No hashtags. No emojis in voiceover. Numbers written as words a TTS voice reads well (e.g. "fifteen thousand naira").',
     parts: [{
       text: JSON.stringify({
         business: p.businessName,

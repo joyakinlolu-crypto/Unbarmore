@@ -12,7 +12,7 @@ const SCENES: Record<StudioTheme, string> = {
   clean_minimalist:
     'a seamless soft off-white studio backdrop with a subtle floor shadow, bright diffused softbox lighting, e-commerce catalogue style',
   luxury_boutique:
-    'an upscale Lagos boutique display: warm brass accents, marble or dark wood surface, soft spotlight with gentle bokeh, premium editorial mood',
+    'an upscale boutique display: warm brass accents, marble or dark wood surface, soft spotlight with gentle bokeh, premium editorial mood',
   outdoor_lifestyle:
     'a bright natural daylight lifestyle setting with soft greenery and warm golden-hour light, shallow depth of field, aspirational but realistic',
 };
