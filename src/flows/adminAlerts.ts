@@ -7,6 +7,9 @@ import { ngn } from '../lib/money.js';
 import { scorecardReply } from './scorecard.js';
 import { signedUrl, uploadFile } from '../db/supabase.js';
 import { cloudVoiceStatus, synthesizeVoiceover } from '../services/ttsService.js';
+import { PRICES_NGN } from '../config/plans.js';
+import { usdNgn } from '../lib/aiCost.js';
+import { FOUNDING, foundingUntilFrom, marginTableText } from '../lib/pricing.js';
 
 const wat = (t: number) => new Date(t + 3600_000).toISOString().slice(5, 16).replace('T', ' ');
 
@@ -38,6 +41,8 @@ export async function adminAlertCommand(phone: string, text: string): Promise<Re
   if (tv) return testVoiceReply(phone, (tv[1] ?? 'english').toLowerCase());
   const sc = t.match(/^(?:score ?card|pilot)(?:\s+(\d{1,2}))?$/i);
   if (sc) return scorecardReply(phone, sc[1] ? Number(sc[1]) : 7);
+  const fd = t.match(/^founding(?:\s+(remove\s+)?(\+?\d[\d\s]{8,14}\d))?$/i);
+  if (fd) return foundingReply(phone, fd[2] ?? null, !!fd[1]);
   if (/^costs?$/i.test(t)) return costsReply(phone);
   if (/^alerts?$/i.test(t)) {
     const list = await recentAlerts(10);
@@ -94,7 +99,36 @@ async function costsReply(phone: string): Promise<Reply> {
     '',
     `By kind: ${[...byKind.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => `${k.replace('_', ' ')} ${ngn(Math.round(c))}`).join(' · ')}`,
     '_Estimates from token counts; check Google AI Studio → Spend for the real number._',
+    '',
+    ...marginTableText([1500, 1800, 2000, 2500], usdNgn()),
   );
+}
+
+/** ADMIN: FOUNDING (status) · FOUNDING 0801… (give a shop the locked Growth price) · FOUNDING REMOVE 0801… */
+async function foundingReply(phone: string, target: string | null, remove: boolean): Promise<Reply> {
+  const { data: list, error } = await db.from('businesses').select('id, name, owner_phone, founding_price_ngn, founding_until').not('founding_price_ngn', 'is', null);
+  if (error) return reply(phone).text('Founding prices are not set up yet. Run migration 014 in Supabase first.');
+  const used = list ?? [];
+  if (!target) {
+    return reply(phone).text(
+      `🏅 *Founding shops: ${used.length} of ${FOUNDING.SLOTS}*`,
+      `Growth at ${ngn(FOUNDING.GROWTH_NGN)}/month for ${FOUNDING.MONTHS} months, then ${ngn(PRICES_NGN.growth_15k.monthly)}.`,
+      ...used.map((b) => `• ${b.name} (…${String(b.owner_phone).slice(-4)}) until ${String(b.founding_until).slice(0, 10)}`),
+      '',
+      'Give one: *FOUNDING 08012345678* · take one back: *FOUNDING REMOVE 08012345678*',
+    );
+  }
+  const digits = target.replace(/\D/g, '');
+  const key = digits.startsWith('234') ? digits : digits.startsWith('0') ? `234${digits.slice(1)}` : `234${digits}`;
+  const { data: biz } = await db.from('businesses').select('id, name, founding_price_ngn').eq('owner_phone', key).maybeSingle();
+  if (!biz) return reply(phone).text(`No shop found for ${target}. Use the owner's WhatsApp number.`);
+  if (remove) {
+    await db.from('businesses').update({ founding_price_ngn: null, founding_until: null }).eq('id', biz.id as string);
+    return reply(phone).text(`✅ *${biz.name}* is back on list price.`);
+  }
+  if (!biz.founding_price_ngn && used.length >= FOUNDING.SLOTS) return reply(phone).text(`All ${FOUNDING.SLOTS} founding places are taken. Remove one first, or raise FOUNDING.SLOTS.`);
+  await db.from('businesses').update({ founding_price_ngn: FOUNDING.GROWTH_NGN, founding_until: foundingUntilFrom() }).eq('id', biz.id as string);
+  return reply(phone).text(`✅ *${biz.name}* is a founding shop: Growth at ${ngn(FOUNDING.GROWTH_NGN)}/month for ${FOUNDING.MONTHS} months. ${FOUNDING.SLOTS - used.length - (biz.founding_price_ngn ? 0 : 1)} place(s) left.`);
 }
 
 const VOICE_LINES: Record<string, string> = {

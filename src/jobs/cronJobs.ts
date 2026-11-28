@@ -3,6 +3,9 @@ import { env } from '../config/env.js';
 import { PLANS, TRIAL_DAYS } from '../config/plans.js';
 import { claimOutbound, consumeQuota, db, isInServiceWindow, ledgerSummary, type Business } from '../db/supabase.js';
 import { cronQueue, QUEUE, redisConnection } from '../lib/queues.js';
+import { alertAdmin } from '../lib/alerts.js';
+import { usdNgn } from '../lib/aiCost.js';
+import { marginAlarms } from '../lib/pricing.js';
 import { ngn, watDateKey, watWeekKey } from '../lib/money.js';
 import { createOwnerMagicLink, createOwnerMagicToken } from '../services/webLink.js';
 import { businessesWithPush, pushEnabled, sendPushToBusiness } from '../services/push.js';
@@ -31,7 +34,15 @@ export async function registerSchedules(): Promise<void> {
 // ═════════════════════════ JOBS ═════════════════════════
 
 /** Trial → free_limited (+ lapsed paid), monthly counter reset. Both RPCs are idempotent. */
+/** Tell the admin once a day if a falling naira has pushed a plan's worst-case AI cost over half its price. */
+async function checkMargins(): Promise<void> {
+  const rate = usdNgn(), bad = marginAlarms(rate);
+  if (!bad.length) return;
+  await alertAdmin('system', `MARGIN WARNING at ₦${rate}/$: ${bad.map((x) => `${x.plan === 'growth_15k' ? 'Growth' : 'Starter'} worst-case AI cost is ${Math.round(x.share * 100)}% of its price`).join(' · ')}`, 'Send COSTS to see the table. Consider raising that plan for NEW shops first.', { key: 'margin-alarm', cooldownS: 86400 });
+}
+
 async function hourly(): Promise<void> {
+  await checkMargins().catch((e) => console.error('[cron:margins]', e));
   const { data: downgraded } = await db.rpc('downgrade_expired');
   const ids = (downgraded ?? []) as string[];
   for (const id of ids) {

@@ -2,6 +2,7 @@ import { DelayedError, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { z } from 'zod';
 import { env } from '../config/env.js';
+import { foundingPrice } from '../lib/pricing.js';
 import { ADVICE_PER_DAY, PLANS, PRICES_NGN, TRIAL_DAYS } from '../config/plans.js';
 import {
   addStaff, claimMessageId, findProductBySku, getSession, latestUndoableBatch, recentProductNames,
@@ -601,7 +602,7 @@ function plansMenu(actor: Actor): Reply {
       '🎙️ *Speak a full day\'s sales & expenses in one voice note* — I split it into every sale, expense and debt. One voice note = 1 of your 250 messages.',
       `${PLANS.starter_5k.videos_used_this_month} HD videos · 150 alert checks · Inflation Shield · Sunday CEO report · unlimited AI advisor`,
       '',
-      `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
+      foundingPrice(b) ? `🚀 Growth — *${ngn(foundingPrice(b)!)}/mo, your founding-shop price, locked until ${new Date(b.founding_until!).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}* (normally ${ngn(PRICES_NGN.growth_15k.monthly)})` : `🚀 Growth — ${ngn(PRICES_NGN.growth_15k.monthly)}/mo or ${ngn(PRICES_NGN.growth_15k.annual)}/yr`,
       '30 videos, no watermark · unlimited logging · 10 staff numbers with audit · live Google Sheet',
       Number(b.referral_wallet_ngn) > 0 ? `\n🎁 Your ${ngn(b.referral_wallet_ngn)} wallet is applied automatically.` : '',
       !paymentsLive() ? '\n_Online payment opens very soon — pick a plan and we\'ll sort it with you._' : '',
@@ -609,7 +610,7 @@ function plansMenu(actor: Actor): Reply {
     .listMenu('Choose plan', [
       { id: 'PAY:starter_5k:monthly', title: 'Starter monthly', description: '₦5,000 / month' },
       { id: 'PAY:starter_5k:annual', title: 'Starter yearly', description: '₦50,000 / year — 2 months free' },
-      { id: 'PAY:growth_15k:monthly', title: 'Growth monthly', description: '₦15,000 / month' },
+      { id: 'PAY:growth_15k:monthly', title: 'Growth monthly', description: foundingPrice(b) ? `${ngn(foundingPrice(b)!)} / month (founding)` : '₦15,000 / month' },
       { id: 'PAY:growth_15k:annual', title: 'Growth yearly', description: '₦150,000 / year — 2 months free' },
     ]);
 }

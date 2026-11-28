@@ -49,6 +49,9 @@ export interface Business {
   address?: string | null;
   /** "GTBank 0123456789 Ada Fabrics": printed on quotes. Needs migration 011. */
   pay_details?: string | null;
+  /** Locked Growth price for a founding shop, until founding_until. Needs migration 014. */
+  founding_price_ngn?: number | null;
+  founding_until?: string | null;
   total_value_recovered_ngn: number;
   google_sheet_id: string | null;
   created_at: string;

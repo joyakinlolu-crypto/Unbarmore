@@ -70,6 +70,8 @@ const schema = z.object({
   PAYSTACK_PLAN_STARTER_ANNUAL: z.string().optional(),
   PAYSTACK_PLAN_GROWTH_MONTHLY: z.string().optional(),
   PAYSTACK_PLAN_GROWTH_ANNUAL: z.string().optional(),
+  /** Optional Paystack plan (₦10,000/month) for founding shops. Without it a founding shop pays by single charge. */
+  PAYSTACK_PLAN_GROWTH_FOUNDING: z.string().optional(),
 
   /** Web-push (free reach outside WhatsApp's 24h window). Generate once: npx web-push generate-vapid-keys. Both unset → push is simply off. */
   VAPID_PUBLIC_KEY: z.string().optional(),

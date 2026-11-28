@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import { PRICES_NGN } from '../config/plans.js';
+import { foundingPrice } from '../lib/pricing.js';
 import { db } from '../db/supabase.js';
 import { ngn, watDayStart } from '../lib/money.js';
 import { reply, type Reply } from '../services/whatsapp.js';
@@ -27,7 +28,7 @@ export async function adminStatsReply(to: string): Promise<Reply> {
   const since24 = new Date(Date.now() - 24 * 3600_000).toISOString();
   const count = async (q: PromiseLike<{ count: number | null }>) => (await q).count ?? 0;
   const [bizAll, active, txToday, vidAll, vidFailed, advisor, payouts] = await Promise.all([
-    db.from('businesses').select('subscription_tier, billing_cycle, created_at, referral_wallet_ngn').limit(50000),
+    db.from('businesses').select('subscription_tier, billing_cycle, created_at, referral_wallet_ngn, founding_price_ngn, founding_until').limit(50000),
     count(db.from('whatsapp_sessions').select('phone_number', { count: 'exact', head: true }).gt('last_inbound_at', since24)),
     db.from('transactions').select('tx_type, total_amount_ngn').eq('status', 'confirmed').gte('transaction_date', day).limit(20000),
     count(db.from('video_jobs').select('id', { count: 'exact', head: true }).gte('created_at', day)),
@@ -35,11 +36,12 @@ export async function adminStatsReply(to: string): Promise<Reply> {
     count(db.from('web_chat_messages').select('id', { count: 'exact', head: true }).eq('role', 'user').gte('created_at', day)),
     db.from('payout_requests').select('amount_ngn').eq('status', 'requested').limit(500),
   ]);
-  const bs = (bizAll.data ?? []) as { subscription_tier: string; billing_cycle: string; created_at: string; referral_wallet_ngn: string }[];
+  const bs = (bizAll.data ?? []) as { subscription_tier: string; billing_cycle: string; created_at: string; referral_wallet_ngn: string; founding_price_ngn?: number | null; founding_until?: string | null }[];
   const tier = (t: string) => bs.filter((b) => b.subscription_tier === t).length;
   const mrr = bs.reduce((a, b) => {
     const p = b.subscription_tier === 'starter_5k' ? PRICES_NGN.starter_5k : b.subscription_tier === 'growth_15k' ? PRICES_NGN.growth_15k : null;
-    return a + (p ? (b.billing_cycle === 'annual' ? p.annual / 12 : p.monthly) : 0);
+    const lock = b.subscription_tier === 'growth_15k' && b.billing_cycle !== 'annual' ? foundingPrice(b) : null;
+    return a + (lock ?? (p ? (b.billing_cycle === 'annual' ? p.annual / 12 : p.monthly) : 0));
   }, 0);
   const t = (txToday.data ?? []) as { tx_type: string; total_amount_ngn: string }[];
   const salesToday = t.filter((x) => x.tx_type === 'sale').reduce((a, x) => a + Number(x.total_amount_ngn), 0);

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { PRICES_NGN, REFERRAL, packByQty } from '../config/plans.js';
+import { foundingPrice } from '../lib/pricing.js';
 import { addVideoCredits, db, getBusiness, type Business } from '../db/supabase.js';
 
 const API = 'https://api.paystack.co';
@@ -36,6 +37,7 @@ function planFromCode(code: string | undefined): { tier: PaidTier; interval: Int
       if (PLAN_CODES[tier][interval] === code) return { tier, interval };
     }
   }
+  if (env.PAYSTACK_PLAN_GROWTH_FOUNDING && code === env.PAYSTACK_PLAN_GROWTH_FOUNDING) return { tier: 'growth_15k', interval: 'monthly' };
   return null;
 }
 
@@ -60,8 +62,11 @@ const syntheticEmail = (b: Business) => `${b.owner_phone}@wa.unbarmore.com`;
  * - Wallet credit → single charge for (price − wallet); renewals stay manual until wallet is used up.
  */
 export async function createCheckoutLink(b: Business, tier: PaidTier, interval: Interval): Promise<{ url: string; amountNgn: number; walletApplied: number }> {
-  if (!paymentsLive() || !isReal(PLAN_CODES[tier][interval])) throw new PaymentsNotLiveError();
-  const price = PRICES_NGN[tier][interval];
+  // A founding shop pays its locked Growth price. With its own Paystack plan it auto-renews; without one it pays by single charge.
+  const founding = tier === 'growth_15k' && interval === 'monthly' ? foundingPrice(b) : null;
+  const planCode = founding ? env.PAYSTACK_PLAN_GROWTH_FOUNDING : PLAN_CODES[tier][interval];
+  if (!paymentsLive() || (!founding && !isReal(planCode))) throw new PaymentsNotLiveError();
+  const price = founding ?? PRICES_NGN[tier][interval];
   // Wallet money discounts the owner's own renewal ONLY if they chose it (USE CREDIT); cash is the default. Never below Paystack's ₦100 minimum charge.
   const wallet = Number(b.referral_wallet_ngn);
   const walletApplied = b.referral_apply_to_renewal && wallet >= REFERRAL.DISCOUNT_MIN_NGN ? Math.min(wallet, price - 100) : 0;
@@ -72,7 +77,7 @@ export async function createCheckoutLink(b: Business, tier: PaidTier, interval: 
     email: syntheticEmail(b),
     amount: amountNgn * 100, // kobo
     currency: 'NGN',
-    ...(walletApplied > 0 ? {} : { plan: PLAN_CODES[tier][interval] }),
+    ...(walletApplied > 0 || !isReal(planCode) ? {} : { plan: planCode }),
     channels: ['card', 'bank_transfer', 'ussd', 'bank'],
     callback_url: `https://wa.me/${env.WHATSAPP_DISPLAY_NUMBER}?text=${encodeURIComponent('I have paid')}`,
     metadata: { ...metadata, custom_fields: [{ display_name: 'Business', variable_name: 'business', value: b.name }] },
