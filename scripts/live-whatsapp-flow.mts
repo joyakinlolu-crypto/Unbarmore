@@ -815,8 +815,8 @@ try {
   media.set('LOGO1', { data: fs.readFileSync(logoJpg), mime: 'image/jpeg' });
   r = await ask('logo-cmd', () => text('LOGO'), (v) => /Send your logo/.test(v.text));
   ok('"LOGO" → asks for the picture', !!r.reply);
-  r = await ask('logo-photo', () => webhook({ type: 'image', image: { id: 'LOGO1', mime_type: 'image/jpeg' } }), (v) => /Logo saved/.test(v.text), 40_000);
-  ok('sending the picture saves it as the logo (not treated as a product photo / video request)', !!r.reply && /Logo saved/.test(r.reply.text), r.reply?.text);
+  r = await ask('logo-photo', () => webhook({ type: 'image', image: { id: 'LOGO1', mime_type: 'image/jpeg' } }), (v) => /logo is saved/i.test(v.text), 40_000);
+  ok('sending the picture saves it as the logo (not treated as a product photo / video request)', !!r.reply && /logo is saved/i.test(r.reply.text), r.reply?.text);
 
   // ───── RENAME BUSINESS: fix a junk name (real accounts were created as "Hi" and "Sent") ─────
   r = await ask('rename-bad', () => text('RENAME BUSINESS Hi'), (v) => /doesn.t look like a business name/.test(v.text));
@@ -962,7 +962,7 @@ try {
       ok('admin ADMIN LINK → a single-use link to the admin console (10 minutes); only its HASH is stored, unused', !!tok && /10 minutes/.test(r.reply!.text) && stored[0]?.token_hash !== tok && stored[0]?.used_at === null && /^[a-f0-9]{64}$/.test(stored[0]?.token_hash ?? ''), r.reply?.text.replace(/\n/g, ' | ').slice(0, 120));
       await rest(`admin_tokens?token_hash=eq.${stored[0]?.token_hash}`, { method: 'DELETE' });
       await webhook({ type: 'text', text: { body: 'ADMIN LINK' } }, undefined, PH2); await sleep(4000);
-      ok('ADMIN LINK from any other number gives NO link (treated as an ordinary first message)', !sent.slice(-3).map(view).some((v) => /admin\/verify/.test(v.text)));
+      ok('ADMIN LINK from any other number gives NO link (treated as an ordinary first message)', !sent.filter((x) => x.to === PH2).map(view).some((v) => /admin\/verify/.test(v.text)));
     }
   } else {
     r = await ask('costs', () => text('COSTS'), (v) => /not set up|No AI usage/.test(v.text));
